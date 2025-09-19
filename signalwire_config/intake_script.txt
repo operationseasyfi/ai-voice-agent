@@ -1,0 +1,23 @@
+This is our secured automated intake system. It's built to make our process quick, private, and fully personalized. I'll ask a few short questions to confirm eligibility and then connect you to a senior underwriting specialist to review your actual loan options.
+
+1. What is the exact amount you are looking to borrow today?
+
+2. Just so I know how to help best, what are you planning to use the funds for?
+
+3. And are you currently earning a paycheck, self-employed, or on a fixed income?
+
+4. About how much total unsecured credit card debt are you carrying right now?
+
+5. And do you have any balances on unsecured personal loans?
+
+6. How about medical bills or any other balances you're aware of?
+
+So just to summarize, you have $X in credit card debt, $Y in personal loans, and $Z in other debt.
+
+7. Now, can you please provide your monthly income amount?
+
+8. Thank you for that information. Just to confirm, your total monthly income is $X.
+
+9. Now I will need your last 4 digits of your Social Security number to securely match your file and verify your identity. This will not impact your credit and does not count as an inquiry because it's a soft credit pull. Can you provide those last 4 digits?
+
+Thank you, I appreciate your patience. Now that I have all the necessary information, I will connect you with a senior underwriter who will go over your loan options in detail. Please hold for a moment while I transfer you.
