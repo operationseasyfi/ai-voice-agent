@@ -3,7 +3,6 @@ from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 from app.config import settings
 from app.webhooks.signalwire_webhooks import router as signalwire_router
-from app.services.agent_server import agent_server
 
 app = FastAPI(
     title="AI Voice Intake Agent",
@@ -22,8 +21,10 @@ app.add_middleware(
 # Include webhook routes
 app.include_router(signalwire_router, prefix="/webhooks/signalwire", tags=["signalwire"])
 
-# Mount SignalWire Agent Server
-app.mount("/agent", agent_server.get_app())
+# Include SignalWire Agent as a router
+from app.services.signalwire_agent import loan_intake_agent
+agent_router = loan_intake_agent.as_router()
+app.include_router(agent_router, prefix="/agent/intake")
 
 @app.get("/health")
 async def health_check():
