@@ -8,4 +8,5 @@ agent.add_skill("datetime")     # Current date/time info
 agent.add_skill("math")         # Mathematical calculations
 
 # Start the agent
-agent.serve()
+agent.serve(port=3000)
+

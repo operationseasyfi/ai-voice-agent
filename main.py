@@ -22,10 +22,10 @@ app.add_middleware(
 # Include webhook routes
 app.include_router(signalwire_router, prefix="/webhooks/signalwire", tags=["signalwire"])
 
-# Include SignalWire Agent as a router
-loan_intake_agent = LoanIntakeAgent(config_file='./config.json')
+# Create SignalWire Agent with proper route
+loan_intake_agent = LoanIntakeAgent()
 agent_router = loan_intake_agent.as_router()
-app.include_router(agent_router, prefix="/agent/intake")
+app.include_router(agent_router, prefix="", tags=["agent"])  # No prefix so SWAIG URLs work
 
 @app.get("/health")
 async def health_check():

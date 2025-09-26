@@ -12,34 +12,95 @@ logger = logging.getLogger(__name__)
 
 class LoanIntakeAgent(AgentBase):
     """Clean AI Voice Agent for loan intake and 3CX transfer"""
-    
+
     def __init__(self, **kwargs):
 
         super().__init__(
             name="James - Easy Finance Intake Specialist",
             **kwargs
         )
-        
+
+        # Add language/voice configuration (required for voice AI agents to enable speaking and fillers)
+        self.add_language(
+            name="English (US)",
+            code="en-US",
+            voice="en-US-Neural2-F",
+            speech_fillers=["Let me check that...", "One moment please..."],
+            function_fillers=["I'm looking that up...", "Let me check that..."]
+        )
+
+        # Set AI parameters to enable the AI section (use a supported model)
+        self.set_params({
+            "ai_model": "gpt-4o-mini",
+            "temperature": 0.7,
+            "max_tokens": 150
+        })
+
+        # Add core skills (this is what creates the AI sections with POM and SWAIG)
+        self.add_skill("datetime")
+        self.add_skill("math")
+
         # Store active call sessions
         self.active_calls: Dict[str, CallSession] = {}
-        
+
         # Initialize step handlers with access to active calls
         self.step_handlers = IntakeStepHandlers(self.active_calls)
-        
+
         # Get conversation configuration
         self.conversation_config = IntakeConversationConfig()
         self.intake_script = self.conversation_config.get_intake_script()
-        
+
+
+        # Setup agent prompt and capabilities
+        self._setup_agent_prompt()
+
+        # Set the main prompt for the AI verb
+        self.set_prompt_text("You are James, an AI voice agent for Easy Finance specializing in loan intake. Conduct professional loan application interviews following the structured conversation flow.")
+
         # Setup conversation flow
         self._setup_conversation_flow()
-        
+
         # Enable debug routes for testing
         self.enable_debug_routes()
-    
+
+    def _setup_agent_prompt(self):
+        """Setup agent prompt using Prompt Object Model (POM)"""
+        # Add role section
+        self.prompt_add_section(
+            "Role",
+            "You are James, an AI voice agent specializing in loan intake for Easy Finance. You conduct professional, efficient loan application interviews."
+        )
+
+        # Add capabilities section
+        self.prompt_add_section(
+            "Loan Intake Capabilities",
+            "You can help customers through the complete loan application process.",
+            bullets=[
+                "Collect exact loan amount requested",
+                "Gather debt information for eligibility assessment",
+                "Record employment and income details",
+                "Securely collect SSN verification",
+                "Route calls to appropriate underwriting queues"
+            ]
+        )
+
+        # Add conversation guidelines
+        self.prompt_add_section(
+            "Conversation Guidelines",
+            "Follow these principles during loan intake calls:",
+            bullets=[
+                "Maintain professional, friendly demeanor throughout",
+                "Ask questions clearly and wait for complete responses",
+                "Confirm all financial amounts for accuracy",
+                "Explain the secure nature of the process",
+                "Prepare customer for transfer to underwriter"
+            ]
+        )
+
     def _setup_conversation_flow(self):
         """Setup the conversation contexts and steps using configuration"""
         contexts = self.define_contexts()
-        main_context = contexts.add_context("intake_flow")
+        main_context = contexts.add_context("default")
         
         # Get step definitions from configuration
         steps = self.conversation_config.get_conversation_steps()
@@ -210,4 +271,5 @@ class LoanIntakeAgent(AgentBase):
         except Exception as e:
             logger.error(f"Error executing transfer: {str(e)}")
             raise
+
 
