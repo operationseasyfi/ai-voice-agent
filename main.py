@@ -1,8 +1,9 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 from app.config import settings
 from app.webhooks.signalwire_webhooks import router as signalwire_router
+from app.services.signalwire_agent import LoanIntakeAgent
 
 app = FastAPI(
     title="AI Voice Intake Agent",
@@ -22,7 +23,7 @@ app.add_middleware(
 app.include_router(signalwire_router, prefix="/webhooks/signalwire", tags=["signalwire"])
 
 # Include SignalWire Agent as a router
-from app.services.signalwire_agent import loan_intake_agent
+loan_intake_agent = LoanIntakeAgent(config_file='./config.json')
 agent_router = loan_intake_agent.as_router()
 app.include_router(agent_router, prefix="/agent/intake")
 

@@ -1,0 +1,11 @@
+from signalwire_agents import AgentBase
+
+# Create an agent and assign a route
+agent = AgentBase("My Assistant", route="/assistant")
+
+# Add some basic capabilities
+agent.add_skill("datetime")     # Current date/time info
+agent.add_skill("math")         # Mathematical calculations
+
+# Start the agent
+agent.serve()

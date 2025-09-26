@@ -3,7 +3,7 @@ from app.services.crm_service import crm_service
 from app.services.call_router import call_router
 from app.services.intake_handlers import IntakeStepHandlers
 from app.services.conversation_config import IntakeConversationConfig
-from app.models.call_data import CallSession, LeadInfo, IntakeData
+from app.models.call_data import CallSession, LeadInfo
 from app.config import settings
 import logging
 from typing import Dict, Any
@@ -13,11 +13,11 @@ logger = logging.getLogger(__name__)
 class LoanIntakeAgent(AgentBase):
     """Clean AI Voice Agent for loan intake and 3CX transfer"""
     
-    def __init__(self):
+    def __init__(self, **kwargs):
+
         super().__init__(
             name="James - Easy Finance Intake Specialist",
-            host="0.0.0.0",
-            port=8000
+            **kwargs
         )
         
         # Store active call sessions
@@ -211,5 +211,3 @@ class LoanIntakeAgent(AgentBase):
             logger.error(f"Error executing transfer: {str(e)}")
             raise
 
-# Initialize the agent
-loan_intake_agent = LoanIntakeAgent()
