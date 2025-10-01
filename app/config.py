@@ -28,8 +28,26 @@ class Settings(BaseSettings):
     WEBHOOK_BASE_URL: str
     DEBUG: bool = False
     
+    # Database components
+    DB_HOST: str = "localhost"
+    DB_PORT: int = 5432
+    DB_USER: str 
+    DB_PASSWORD: str 
+    DB_NAME: str
+    
+    # Authentication
+    SECRET_KEY: str 
+    ALGORITHM: str = "HS256" 
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 180
+    
     # Testing
     DISABLE_AGENT_AUTH: bool = False  # Set to True for local testing
+    
+    @property
+    def DATABASE_URL(self) -> str:
+        """Construct database URL from components."""
+        return f"postgresql://{self.DB_USER}:{self.DB_PASSWORD}@{self.DB_HOST}:{self.DB_PORT}/{self.DB_NAME}"
+    
     
     class Config:
         env_file = ".env"

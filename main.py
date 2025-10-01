@@ -1,7 +1,10 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import text
 import uvicorn
 from app.config import settings
+from app.database import get_db
 from app.webhooks.signalwire_webhooks import router as signalwire_router
 from app.services.signalwire_agent import LoanIntakeAgent
 
@@ -30,6 +33,29 @@ app.include_router(agent_router, prefix="", tags=["agent"])  # No prefix so SWAI
 @app.get("/health")
 async def health_check():
     return {"status": "healthy", "service": "ai-voice-intake"}
+
+@app.get("/health/database")
+async def database_health_check(db: AsyncSession = Depends(get_db)):
+    """Test database connection and session."""
+    try:
+        # Test basic query
+        result = await db.execute(text("SELECT 1 as test, NOW() as current_time"))
+        row = result.fetchone()
+        
+        return {
+            "status": "healthy",
+            "database": "connected",
+            "test_query": row.test,
+            "timestamp": row.current_time,
+            "message": "Database session working correctly"
+        }
+    except Exception as e:
+        return {
+            "status": "unhealthy",
+            "database": "disconnected",
+            "error": str(e),
+            "message": "Database session failed"
+        }
 
 if __name__ == "__main__":
     uvicorn.run(
