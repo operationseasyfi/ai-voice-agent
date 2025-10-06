@@ -9,7 +9,7 @@ import logging
 from typing import Dict, Any
 
 logger = logging.getLogger(__name__)
-
+print('voice id: ', settings.ELEVEN_LABS_VOICE_ID)
 class LoanIntakeAgent(AgentBase):
     """Clean AI Voice Agent for loan intake and 3CX transfer"""
 
@@ -24,8 +24,16 @@ class LoanIntakeAgent(AgentBase):
         self.add_language(
             name="English (US)",
             code="en-US",
-            voice="en-US-Neural2-F",
-            speech_fillers=["Let me check that...", "One moment please..."],
+            voice=settings.ELEVEN_LABS_VOICE_ID,
+            engine="elevenlabs", 
+            speech_fillers=[
+                "Let me check that...", 
+                "One moment please...",  
+                "uhh ha,",
+                "aah ha,",
+                "hmm...",
+                "let's see,"
+            ],
             function_fillers=["I'm looking that up...", "Let me check that..."]
         )
 

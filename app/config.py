@@ -7,6 +7,9 @@ class Settings(BaseSettings):
     SIGNALWIRE_API_TOKEN: str
     SIGNALWIRE_SPACE_URL: str
     SIGNALWIRE_SIGNING_KEY: str
+
+    # ELEVEN LABS
+    ELEVEN_LABS_VOICE_ID: str = 'Gqe8GJJLg3haJkTwYj2L'
     
     # OCC CRM
     OCC_CRM_API_URL: str

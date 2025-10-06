@@ -17,6 +17,25 @@ AsyncSessionLocal = sessionmaker(
 # Base class for models
 Base = declarative_base()
 
+class BaseModel(Base):
+    __abstract__ = True
+
+    def to_dict(self):
+        """Return a dictionary representation of the user."""
+        return {column.name: self.parse(getattr(self, column.name)) for column in self.__table__.columns}
+
+    def parse(self, value):
+        import json
+        try:
+            if isinstance(value, str):
+                return json.loads(value)
+            else:
+                return value
+        except (TypeError, ValueError):
+            return value
+
+
+
 # Dependency to get database session
 async def get_db():
     async with AsyncSessionLocal() as session:

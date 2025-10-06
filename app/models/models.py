@@ -2,7 +2,7 @@ from sqlalchemy import Column, Integer, String, Boolean, DateTime, Float, Text, 
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
-from app.database import Base
+from app.database import BaseModel
 import uuid
 
 
@@ -10,7 +10,7 @@ class Preferences:
     """User preferences model."""
     theme: str = "light" 
 
-class User(Base):
+class User(BaseModel):
     __tablename__ = "users"
 
     id = Column(UUID(as_uuid=True), primary_key=True, index=True, default=uuid.uuid4)
@@ -32,5 +32,23 @@ class User(Base):
 
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
     
     
+    def to_dict_safe(self):
+        """Return a safe dictionary representation (excluding sensitive fields)."""
+        exclude_fields = {'password', 'twilio_auth_token'}
+        
+        return {
+            column.name: self.parse(getattr(self, column.name)) 
+            for column in self.__table__.columns 
+            if column.name not in exclude_fields
+        }
+    
+    
+    def is_admin(self):
+        """Check if the user has admin role."""
+        roles = self.parse(self.roles) if self.roles else []
+        return 'admin' in roles
+    
+  

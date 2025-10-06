@@ -15,7 +15,7 @@ class AuthService:
         result = await db.execute(select(User).where(User.username == username))
         user = result.scalar_one_or_none()
         
-        if not user or not verify_password(password, user.hashed_password):
+        if not user or not verify_password(password, user.password):
             return None
         
         return user
