@@ -1,424 +1,711 @@
 from signalwire_agents import AgentBase, SwaigFunctionResult
-from app.services.crm_service import crm_service
 from app.services.call_router import call_router
-from app.services.intake_handlers import IntakeStepHandlers
-from app.services.conversation_config import IntakeConversationConfig
-from app.models.call_data import CallSession, LeadInfo
 from app.config import settings
 import logging
 from typing import Dict, Any
 
 logger = logging.getLogger(__name__)
-print('voice id: ', settings.ELEVEN_LABS_VOICE_ID)
+
+
 class LoanIntakeAgent(AgentBase):
-    """Clean AI Voice Agent for loan intake and 3CX transfer"""
+    """
+    AI Voice Agent for loan intake with structured conversation flow.
+    """
 
     def __init__(self, **kwargs):
-
+        # Initialize the base agent with a name
         super().__init__(
-            name="Jessica - Easy Finance Intake Specialist",
+            name="Jessica - Easy Finance Specialist",
+            route="/webhook",
             **kwargs
         )
 
-        # Add language/voice configuration (required for voice AI agents to enable speaking and fillers)
+        # Configure voice and language (required for voice agents)
         self.add_language(
             name="English (US)",
             code="en-US",
             voice="elevenlabs.rachel:eleven_flash_v2_5",
         )
 
-        # Set AI parameters to enable the AI section (use a supported model)
+        # Set AI model parameters
         self.set_params({
             "ai_model": "gpt-4o-mini",
-            "temperature": 0.7,
-            "max_tokens": 150
+            "temperature": 0.5,
+            "max_tokens": 200,
         })
 
-        # Add core skills (this is what creates the AI sections with POM and SWAIG)
-        self.add_skill("datetime")
-        self.add_skill("math")
+        self.prompt_add_section(
+            'personality',
+            """You are Jessica, a professional AI specialist for Easy Finance on a recorded line. You handle inbound calls from leads who received SMS loan offers.
 
-        # Store active call sessions
-        self.active_calls: Dict[str, CallSession] = {}
-
-        # Initialize step handlers with access to active calls
-        self.step_handlers = IntakeStepHandlers(self.active_calls)
-
-        # Get conversation configuration
-        self.conversation_config = IntakeConversationConfig()
-        self.intake_script = self.conversation_config.get_intake_script()
-
-
-        # Setup agent prompt and capabilities
-        self._setup_agent_prompt()
-
-        # Set the main prompt for the AI verb
-        self.set_prompt_text("You are Jessica, an AI voice agent for Easy Finance specializing in loan intake. Conduct professional loan application interviews following the structured conversation flow.")
+            CRITICAL RULES:
+            - Follow the intake script EXACTLY as written - do not add extra words or improvise
+            - Ask ONE question at a time and WAIT for the caller's full response
+            - ALWAYS call the designated collection function immediately after receiving each answer
+            - Be professional, warm, and efficient
+            - Keep your responses brief and natural
+            """
+        )
 
         # Setup conversation flow
-        # self._setup_conversation_flow()
+        self._setup_conversation_flow()
 
         # Enable debug routes for testing
         self.enable_debug_routes()
 
-    def _setup_agent_prompt(self):
-        """Setup agent prompt using Prompt Object Model (POM)"""
-        # Add role section
-        self.prompt_add_section(
-            "Role",
-            """
-            You are Jessica, a professional and empathetic AI intake specialist for Easy Finance. You handle inbound calls from leads who received SMS loan offers. Your role is to greet callers personally, conduct a thorough intake interview, collect key financial data, and seamlessly transfer qualified callers to the appropriate human underwriter queue.
-
-            CORE OBJECTIVES
-
-            Personalize the greeting using CRM data when available
-            Execute the intake script verbatim and collect all required data points
-            Maintain a professional, warm, and efficient tone throughout
-            Accurately capture and validate all financial information
-            Route callers to the correct queue based on total unsecured debt
-            Push all collected data to OCC CRM in real-time via API
-            Transfer calls smoothly to 3CX via Twilio SIP trunk
-
-
-            CALL INITIALIZATION
-            CRM Lookup Protocol
-
-            Before answering the call, perform a CRM lookup using the caller's phone number
-            Query the OCC CRM API for: Lead Name, Loan Amount Offered, Lead ID, and any existing notes
-
-            Greeting Logic
-            If CRM record found:
-
-            "Hi, this is Jessica with Easy Finance on a recorded line. Am I speaking with [Lead Name]? Are you calling regarding the loan offer for $[Loan Amount] you received?"
-
-            If CRM record NOT found:
-
-            "Hi, this is Jessica with Easy Finance on a recorded line. How can I help you today?"
-
-            Handling Mismatch Scenarios
-
-            If caller says "No, this is [Different Name]": Update your records mentally and proceed with the script using the correct name
-            If caller is confused about the loan offer: Acknowledge and pivot smoothly: "No problem, let me ask you a few questions to see how we can best help you today."
-
-
-            INTAKE SCRIPT (MANDATORY VERBATIM)
-            After confirming identity, proceed with:
-
-            "This is our secured automated intake system. It's built to make our process quick, private, and fully personalized. I'll ask a few short questions to confirm eligibility and then connect you to a senior underwriting specialist to review your actual loan options."
-
-            Question Sequence
-            1. Loan Amount Requested
-
-            "What is the exact amount you are looking to borrow today?"
-
-
-            Capture: Numeric value (e.g., $15,000)
-            Validation: If unclear or non-numeric, politely ask: "Just to clarify, what dollar amount are you looking to borrow?"
-
-            2. Purpose of Funds
-
-            "Just so I know how to help best, what are you planning to use the funds for?"
-
-
-            Capture: Open-ended response (e.g., "debt consolidation," "home repairs," "medical bills")
-            No validation required – accept any reasonable answer
-
-            3. Employment Status
-
-            "And are you currently earning a paycheck, self-employed, or on a fixed income?"
-
-
-            Capture: Category (Paycheck / Self-Employed / Fixed Income)
-            Clarification if needed: "Are you receiving regular wages from an employer, running your own business, or receiving Social Security or disability?"
-
-            4. Credit Card Debt
-
-            "About how much total unsecured credit card debt are you carrying right now?"
-
-
-            Capture: Numeric value (e.g., $18,000)
-            Handle "none" or "$0": Acknowledge and record as $0
-
-            5. Personal Loan Debt
-
-            "And do you have any balances on unsecured personal loans?"
-
-
-            Capture: Numeric value or $0
-            Clarification if needed: "Unsecured personal loans are loans that didn't require collateral, like a car or house."
-
-            6. Medical Bills & Other Debt
-
-            "How about medical bills or any other balances you're aware of?"
-
-
-            Capture: Numeric value or $0
-
-            7. Debt Summary & Confirmation
-
-            "So just to summarize, you have $[X] in credit card debt, $[Y] in personal loans, and $[Z] in other debt. Is that correct?"
-
-
-            Wait for confirmation: "Yes" / "No, actually..."
-            If correction needed: Adjust values and re-confirm
-
-            8. Monthly Income
-
-            "Now, can you please provide your monthly income amount?"
-
-
-            Capture: Numeric value (e.g., $4,500)
-            Clarification if needed: "Your monthly income before taxes – what you earn or receive each month."
-
-            9. Income Confirmation
-
-            "Thank you for that information. Just to confirm, your total monthly income is $[X]. Is that correct?"
-
-
-            Wait for confirmation
-            Adjust if needed
-
-            10. Social Security Number (Last 4 Digits)
-
-            "Now I will need your last 4 digits of your Social Security number to securely match your file and verify your identity. This will not impact your credit and does not count as an inquiry because it's a soft credit pull. Can you provide those last 4 digits?"
-
-
-            Capture: 4-digit numeric value
-            Validation: Ensure exactly 4 digits
-            Reassurance if hesitant: "I completely understand your concern. This is only for identity verification and does not affect your credit score in any way."
-
-
-            DATA COLLECTION & VALIDATION RULES
-            Required Fields
-
-            Loan Amount Requested
-            Purpose of Funds
-            Employment Status
-            Credit Card Debt (can be $0)
-            Personal Loan Debt (can be $0)
-            Medical/Other Debt (can be $0)
-            Monthly Income
-            SSN Last 4 Digits
-
-            Validation Guidelines
-
-            Numeric fields: Accept natural language ("fifteen thousand" = $15,000) and convert to numeric
-            Unclear responses: Politely ask for clarification once; if still unclear, note "unclear" and proceed
-            Refusal to answer SSN: If caller refuses, note refusal and proceed to transfer (inform underwriter during handoff)
-
-            Tone During Data Collection
-
-            Patient and unhurried: Never rush the caller
-            Empathetic: Acknowledge concerns (e.g., "I understand this is sensitive information")
-            Professional: Maintain formality without being robotic
-            Conversational: Use natural pauses and inflections
-
-
-            ROUTING LOGIC
-            Calculate Total Unsecured Debt
-            Formula:
-            Total Unsecured Debt = Credit Card Debt + Personal Loan Debt + Medical/Other Debt
-            Queue Assignment
-
-            If Total Unsecured Debt ≥ $35,000: Route to Queue A (High-Value Leads)
-            If Total Unsecured Debt < $35,000: Route to Queue B (Standard Leads)
-
-
-            TRANSFER SCRIPT
-            After collecting all data:
-
-            "Thank you, I appreciate your patience. Now that I have all the necessary information, I will connect you with a senior underwriter who will go over your loan options in detail. Please hold for a moment while I transfer you."
-
-            Transfer Technical Process
-
-            Push all collected data to OCC CRM via API/webhook immediately before transfer
-            Initiate SIP bridge to Twilio trunk
-            Dial the appropriate 3CX Queue DID:
-
-            Queue A DID: [CONFIGURATION VALUE]
-            Queue B DID: [CONFIGURATION VALUE]
-
-
-            Bridge the call and remain silent during ringback
-            Once human answers: Drop off the call gracefully
-            
-            """
+    def _get_intake_state(self, raw_data):
+        """Get current intake progress from global_data"""
+        global_data = raw_data.get('global_data', {})
+
+        default_state = {
+            # Call metadata
+            "call_id": raw_data.get("call_id"),
+            "caller_number": raw_data.get("caller_id_num", "").replace("+1", ""),
+            "lead_name": None,
+
+            # Question answers (all nullable initially)
+            "loan_amount": None,
+            "funds_purpose": None,
+            "employment_status": None,
+            "credit_card_debt": None,
+            "personal_loan_debt": None,
+            "other_debt": None,
+            "monthly_income": None,
+            "ssn_last_four": None,
+
+            # Calculated values
+            "total_debt": 0.0,
+
+            # Progress tracking
+            "questions_answered": [],
+        }
+
+        return global_data.get('intake_state', default_state), global_data
+
+    def _save_intake_state(self, result: SwaigFunctionResult, intake_state, global_data):
+        """Save intake state to global_data"""
+        
+        global_data['intake_state'] = intake_state
+        result.update_global_data(global_data)
+        return result
+
+    def _setup_conversation_flow(self):
+
+        # Define contexts (conversation containers)
+        contexts = self.define_contexts()
+        intake_context = (
+            contexts.add_context("default")
+            .add_section("Goal", "Complete the loan intake process by following the EXACT script in sequence")
+            .add_section("Critical Rules", """
+                - Ask ONLY ONE question per step - never combine questions
+                - WAIT for the caller's complete response before proceeding
+                - MUST call the collection function immediately after receiving each answer
+                - Do NOT skip any steps or questions
+                - Do NOT add extra commentary, explanations, or questions
+                - Do not repeat questions
+                - Sequence: greeting → introduction → loan_amount → funds_purpose → employment → credit_card_debt → personal_loan_debt → other_debt → debt_summary → monthly_income → income_confirmation → ssn_last_four
+            """)
         )
 
+        # ============================================
+        # STEP 1: GREETING
+        # ============================================
+        intake_context.add_step("greeting") \
+            .add_section("Current Task", "Greet the caller personally using CRM data if available") \
+            .add_bullets("Process", [
+                "If CRM data found: Say EXACTLY 'Hi, this is Jessica with Easy Finance on a recorded line. Am I speaking with [Lead Name]? Are you calling regarding the loan offer for $[Loan Amount] you received?'",
+                "If NO CRM data: Say 'Hi, this is Jessica with Easy Finance on a recorded line. How can I help you today?'",
+                "WAIT for their confirmation/response",
+                "Once they respond, move immediately to introduction"
+            ]) \
+            .set_step_criteria("Caller has been greeted with personalized or generic greeting") \
+            .set_valid_steps(["introduction"])
 
-    # def _setup_conversation_flow(self):
-    #     """Setup the conversation contexts and steps using configuration"""
-    #     contexts = self.define_contexts()
-    #     main_context = contexts.add_context("default")
-        
-    #     # Get step definitions from configuration
-    #     steps = self.conversation_config.get_conversation_steps()
-        
-    #     for step_config in steps:
-    #         step = main_context.add_step(step_config["name"])
-            
-    #         # Set step text from script
-    #         text_path = step_config["text"]
-    #         if "." in text_path:
-    #             # Handle nested paths like "questions.loan_amount"
-    #             parts = text_path.split(".")
-    #             text = self.intake_script
-    #             for part in parts:
-    #                 text = text[part]
-    #         else:
-    #             # Handle direct keys like "intro"
-    #             text = self.intake_script[text_path]
-            
-    #         step.set_text(text)
-            
-    #         # Set criteria if specified
-    #         if "criteria" in step_config:
-    #             step.set_step_criteria(step_config["criteria"])
-            
-    #         # Set valid next steps
-    #         if step_config["next_steps"]:
-    #             step.set_valid_steps(step_config["next_steps"])
-    
-    # async def on_call_start(self, call_context) -> str:
-    #     """Handle incoming call with CRM lookup and personalized greeting"""
-    #     try:
-    #         # Extract call information from context
-    #         caller_number = call_context.call.from_number.replace("+1", "")
-    #         call_id = call_context.call.call_id
-            
-    #         logger.info(f"Call started: {call_id} from {caller_number}")
-            
-    #         # Perform CRM lookup
-    #         lead_info = await crm_service.lookup_lead_by_phone(caller_number)
-            
-    #         if not lead_info:
-    #             lead_info = LeadInfo(phone_number=caller_number, found_in_crm=False)
-            
-    #         # Store call session
-    #         call_session = CallSession(call_id=call_id, lead_info=lead_info)
-    #         self.active_calls[call_id] = call_session
-            
-    #         # Generate personalized greeting
-    #         if lead_info.found_in_crm and lead_info.lead_name:
-    #             greeting = f"Hi, this is James with Easy Finance on a recorded line. Am I speaking with {lead_info.lead_name}? Are you calling regarding the loan offer for ${lead_info.loan_amount:,.0f} you received?"
-    #         else:
-    #             greeting = "Hi, this is James with Easy Finance on a recorded line. How can I help you today?"
-            
-    #         return greeting
-            
-    #     except Exception as e:
-    #         logger.error(f"Error handling call start: {str(e)}")
-    #         return "Hi, this is James with Easy Finance on a recorded line. How can I help you today?"
-    
-    async def on_call_end(self, call_context):
-        """Clean up call session when call ends"""
+        # ============================================
+        # STEP 2: INTRODUCTION
+        # ============================================
+        intake_context.add_step("introduction") \
+            .add_section("Current Task", "Explain the automated intake system") \
+            .add_bullets("Process", [
+                "Say EXACTLY: 'This is our secured automated intake system. It's built to make our process quick, private, and fully personalized. I'll ask a few short questions to confirm eligibility and then connect you to a senior underwriting specialist to review your actual loan options.'",
+                "Do NOT wait for response - move immediately to loan_amount step"
+            ]) \
+            .set_step_criteria("Introduction script delivered") \
+            .set_valid_steps(["loan_amount"])
+
+        # ============================================
+        # STEP 3: LOAN AMOUNT (Question 1)
+        # ============================================
+        intake_context.add_step("loan_amount") \
+            .add_section("Current Task", "Ask Question 1 from the script") \
+            .add_bullets("Process", [
+                "Ask EXACTLY: 'What is the exact amount you are looking to borrow today?'",
+                "WAIT for their response",
+                "Do NOT add extra commentary"
+            ]) \
+            .set_step_criteria("collect_loan_amount function called successfully") \
+            .set_functions(["collect_loan_amount"]) \
+            .set_valid_steps(["funds_purpose"])
+
+        # ============================================
+        # STEP 4: PURPOSE OF FUNDS (Question 2)
+        # ============================================
+        intake_context.add_step("funds_purpose") \
+            .add_section("Current Task", "Ask Question 2 from the script") \
+            .add_bullets("Process", [
+                "Ask EXACTLY: 'Just so I know how to help best, what are you planning to use the funds for?'",
+                "WAIT for their explanation",
+                "Do NOT add extra commentary"
+            ]) \
+            .set_step_criteria("collect_funds_purpose function called successfully") \
+            .set_functions(["collect_funds_purpose"]) \
+            .set_valid_steps(["employment"])
+
+        # ============================================
+        # STEP 5: EMPLOYMENT STATUS (Question 3)
+        # ============================================
+        intake_context.add_step("employment") \
+            .add_section("Current Task", "Ask Question 3 from the script") \
+            .add_bullets("Process", [
+                "Ask EXACTLY: 'And are you currently earning a paycheck, self-employed, or on a fixed income?'",
+                "WAIT for their employment type",
+                "Do NOT add extra commentary"
+            ]) \
+            .set_step_criteria("collect_employment function called successfully") \
+            .set_functions(["collect_employment"]) \
+            .set_valid_steps(["credit_card_debt"])
+
+        # ============================================
+        # STEP 6: CREDIT CARD DEBT (Question 4)
+        # ============================================
+        intake_context.add_step("credit_card_debt") \
+            .add_section("Current Task", "Ask Question 4 from the script") \
+            .add_bullets("Process", [
+                "Ask EXACTLY: 'About how much total unsecured credit card debt are you carrying right now?'",
+                "WAIT for the amount (use 0 if they say none)",
+                "Do NOT add extra commentary"
+            ]) \
+            .set_step_criteria("collect_credit_card_debt function called successfully") \
+            .set_functions(["collect_credit_card_debt"]) \
+            .set_valid_steps(["personal_loan_debt"])
+
+        # ============================================
+        # STEP 7: PERSONAL LOAN DEBT (Question 5)
+        # ============================================
+        intake_context.add_step("personal_loan_debt") \
+            .add_section("Current Task", "Ask Question 5 from the script") \
+            .add_bullets("Process", [
+                "Ask EXACTLY: 'And do you have any balances on unsecured personal loans?'",
+                "WAIT for the amount (use 0 if they say no)",
+                "Do NOT add extra commentary"
+            ]) \
+            .set_step_criteria("collect_personal_loan_debt function called successfully") \
+            .set_functions(["collect_personal_loan_debt"]) \
+            .set_valid_steps(["other_debt"])
+
+        # ============================================
+        # STEP 8: OTHER DEBT (Question 6)
+        # ============================================
+        intake_context.add_step("other_debt") \
+            .add_section("Current Task", "Ask Question 6 from the script") \
+            .add_bullets("Process", [
+                "Ask EXACTLY: 'How about medical bills or any other balances you're aware of?'",
+                "WAIT for the amount (use 0 if they say none)",
+                "Do NOT add extra commentary"
+            ]) \
+            .set_step_criteria("collect_other_debt function called successfully") \
+            .set_functions(["collect_other_debt"]) \
+            .set_valid_steps(["debt_summary"])
+
+        # ============================================
+        # STEP 9: DEBT SUMMARY
+        # ============================================
+        intake_context.add_step("debt_summary") \
+            .add_section("Current Task", "Summarize all debt collected") \
+            .add_bullets("Process", [
+                "Say EXACTLY: 'So just to summarize, you have $[X] in credit card debt, $[Y] in personal loans, and $[Z] in other debt.'",
+                "Use the ACTUAL amounts collected from previous steps",
+                "Do NOT wait for response - move immediately to monthly_income"
+            ]) \
+            .set_step_criteria("Debt summary delivered") \
+            .set_valid_steps(["monthly_income"])
+
+        # ============================================
+        # STEP 10: MONTHLY INCOME (Question 7)
+        # ============================================
+        intake_context.add_step("monthly_income") \
+            .add_section("Current Task", "Ask Question 7 from the script") \
+            .add_bullets("Process", [
+                "Ask EXACTLY: 'Now, can you please provide your monthly income amount?'",
+                "WAIT for the dollar amount",
+                "Do NOT add extra commentary"
+            ]) \
+            .set_step_criteria("collect_monthly_income function called successfully") \
+            .set_functions(["collect_monthly_income"]) \
+            .set_valid_steps(["income_confirmation"])
+
+        # ============================================
+        # STEP 11: INCOME CONFIRMATION (Question 8)
+        # ============================================
+        intake_context.add_step("income_confirmation") \
+            .add_section("Current Task", "Confirm monthly income") \
+            .add_bullets("Process", [
+                "Say EXACTLY: 'Thank you for that information. Just to confirm, your total monthly income is $[amount].'",
+                "Use the ACTUAL income amount collected",
+                "WAIT for their confirmation (yes/okay/correct)",
+                "Once confirmed, move to ssn_last_four"
+            ]) \
+            .set_step_criteria("Income confirmed by caller") \
+            .set_valid_steps(["ssn_last_four"])
+
+        # ============================================
+        # STEP 12: SSN LAST 4 (Question 9)
+        # ============================================
+        intake_context.add_step("ssn_last_four") \
+            .add_section("Current Task", "Ask Question 9 from the script") \
+            .add_bullets("Process", [
+                "Say EXACTLY: 'Now I will need your last 4 digits of your Social Security number to securely match your file and verify your identity. This will not impact your credit and does not count as an inquiry because it's a soft credit pull. Can you provide those last 4 digits?'",
+                "WAIT for exactly 4 digits",
+                "Do NOT add extra commentary"
+            ]) \
+            .set_step_criteria("collect_ssn_last_four function called successfully") \
+            .set_functions(["collect_ssn_last_four"]) \
+            .set_valid_steps(["transfer"])
+
+        # ============================================
+        # STEP 13: TRANSFER
+        # ============================================
+        intake_context.add_step("transfer") \
+            .add_section("Current Task", "Deliver transfer message from script") \
+            .add_bullets("Process", [
+                "Say EXACTLY: 'Thank you, I appreciate your patience. Now that I have all the necessary information, I will connect you with a senior underwriter who will go over your loan options in detail. Please hold for a moment while I transfer you.'",
+                "Do NOT wait for response - call will be transferred automatically"
+            ]) \
+            .set_step_criteria("Transfer message delivered") \
+            .set_valid_steps([])  # End of flow
+
+    # ============================================
+    # LIFECYCLE HOOKS
+    # ============================================
+
+    def on_swml_request(self, request_data=None, callback_path=None, request=None):
+        """
+        Called when a call first comes in (SignalWire's actual lifecycle hook).
+        """
         try:
-            call_id = call_context.call.call_id
-            if call_id in self.active_calls:
-                del self.active_calls[call_id]
-                logger.info(f"Call {call_id} ended and cleaned up")
+            # Extract call information from request_data
+            if request_data and 'call' in request_data:
+                call_info = request_data['call']
+                call_id = call_info.get('call_id', 'unknown')
+                caller_number = call_info.get('from_number', call_info.get('from', '')).replace("+1", "")
+
+                print(f"📞 Call ID: {call_id}")
+                print(f"📞 From Number: {caller_number}")
+                print(f"📞 Call started: {call_id} from {caller_number}")
+
+                # TODO: When CRM is ready, lookup lead by phone and store in global_data
+                # lead_info = crm_service.lookup_lead_by_phone(caller_number)
+                # Initial global_data will be set up via _get_intake_state() in first SWAIG call
+
+                print(f"✅ Call session started - state will be managed in global_data")
+                print(f"✅ Call session started for {call_id}")
+
         except Exception as e:
-            logger.error(f"Error cleaning up call: {str(e)}")
-    
-    # async def on_conversation_start(self, call_context):
-    #     """Called when conversation begins - trigger CRM lookup and set initial context"""
-    #     try:
-    #         call_id = call_context.call.call_id
-            
-    #         # Set the conversation to start with greeting
-    #         call_context.set_current_step("greeting")
-            
-    #         logger.info(f"Conversation started for call {call_id}")
-            
-    #     except Exception as e:
-    #         logger.error(f"Error starting conversation: {str(e)}")
-    
-    # # SWAIG Functions using @AgentBase.tool decorators
-    # @AgentBase.tool(
-    #     name="collect_loan_amount",
-    #     description="Collect and validate the loan amount from user response",
-    #     parameters={
-    #         "user_response": {
-    #             "type": "string",
-    #             "description": "The user's response containing the loan amount"
-    #         },
-    #         "call_id": {
-    #             "type": "string", 
-    #             "description": "The unique call identifier"
-    #         }
-    #     }
-    # )
-    # def collect_loan_amount(self, args, raw_data):
-    #     """SWAIG function to collect loan amount"""
-    #     return self.step_handlers.collect_loan_amount(args, raw_data)
-    
-    # @AgentBase.tool(
-    #     name="collect_debt_amounts",
-    #     description="Collect credit card, personal loan, and other debt amounts",
-    #     parameters={
-    #         "cc_debt": {
-    #             "type": "string",
-    #             "description": "Credit card debt amount"
-    #         },
-    #         "personal_debt": {
-    #             "type": "string",
-    #             "description": "Personal loan debt amount"
-    #         },
-    #         "other_debt": {
-    #             "type": "string", 
-    #             "description": "Other debt amount (medical bills, etc.)"
-    #         },
-    #         "call_id": {
-    #             "type": "string",
-    #             "description": "The unique call identifier"
-    #         }
-    #     }
-    # )
-    # def collect_debt_amounts(self, args, raw_data):
-    #     """SWAIG function to collect all debt amounts"""
-    #     return self.step_handlers.collect_debt_amounts(args, raw_data)
-    
-    # @AgentBase.tool(
-    #     name="finalize_intake",
-    #     description="Collect final information and prepare for transfer",
-    #     parameters={
-    #         "monthly_income": {
-    #             "type": "string",
-    #             "description": "Monthly income amount"
-    #         },
-    #         "ssn_last_four": {
-    #             "type": "string",
-    #             "description": "Last 4 digits of Social Security Number"
-    #         },
-    #         "call_id": {
-    #             "type": "string",
-    #             "description": "The unique call identifier"
-    #         }
-    #     }
-    # )
-    def finalize_intake(self, args, raw_data):
-        """SWAIG function to finalize intake and prepare transfer"""
-        return self.step_handlers.finalize_intake(args, raw_data)
-    
+            print(f"❌ Error in on_swml_request: {str(e)}")
+            print(f"❌ Error in on_swml_request: {str(e)}")
+
+        # IMPORTANT: Call parent implementation to continue normal SWML flow
+        return super().on_swml_request(request_data, callback_path, request)
+
+
+    # ============================================
+    # SWAIG FUNCTIONS (Data Collection Tools)
+    # ============================================
+
+    @AgentBase.tool(
+        name="collect_loan_amount",
+        purpose="Extract and store the loan amount from the user's response. Call this when the user tells you how much they want to borrow.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "amount": {
+                    "type": "number",
+                    "description": "The loan amount in dollars (e.g., 15000 for $15,000)"
+                }
+            },
+            "required": ["amount"]
+        }
+    )
+    def collect_loan_amount(self, args, raw_data):
+        try:
+            amount = args.get("amount")
+
+            # Get intake state from global_data
+            intake_state, global_data = self._get_intake_state(raw_data)
+
+            # Store in global_data
+            intake_state["loan_amount"] = float(amount)
+            intake_state["questions_answered"].append("loan_amount")
+
+            print(f"💰 Collected loan amount: ${amount:,.2f}")
+
+            result = SwaigFunctionResult(
+                response=f"Got it, ${amount:,.0f}."
+            )
+
+            # Save state to global_data
+            return self._save_intake_state(result, intake_state, global_data)
+
+        except Exception as e:
+            print(f"❌ Error in collect_loan_amount: {str(e)}")
+            return SwaigFunctionResult(response="Error collecting amount")
+
+    @AgentBase.tool(
+        name="collect_funds_purpose",
+        purpose="Store what the user plans to use the loan for. Call this after they explain their purpose.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "purpose": {
+                    "type": "string",
+                    "description": "What the user will use the funds for (e.g., 'debt consolidation', 'home repairs')"
+                }
+            },
+            "required": ["purpose"]
+        }
+    )
+    def collect_funds_purpose(self, args, raw_data):
+        """Collect and store the purpose of the loan"""
+        try:
+            purpose = args.get("purpose")
+
+            # Get intake state from global_data
+            intake_state, global_data = self._get_intake_state(raw_data)
+
+            # Store in global_data
+            intake_state["funds_purpose"] = purpose
+            intake_state["questions_answered"].append("funds_purpose")
+
+            print(f"🎯 Collected purpose: {purpose}")
+
+            result = SwaigFunctionResult(
+                response=f"Understood, for {purpose}."
+            )
+
+            # Save state to global_data
+            return self._save_intake_state(result, intake_state, global_data)
+
+        except Exception as e:
+            print(f"❌ Error in collect_funds_purpose: {str(e)}")
+            return SwaigFunctionResult(response="Error collecting purpose")
+
+    @AgentBase.tool(
+        name="collect_employment",
+        purpose="Store the employment status. Call this after the user tells you about their employment.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "employment_status": {
+                    "type": "string",
+                    "description": "Employment type: 'employed', 'self_employed', or 'fixed_income'"
+                }
+            },
+            "required": ["employment_status"]
+        }
+    )
+    def collect_employment(self, args, raw_data):
+        """Collect and store employment status"""
+        try:
+            employment_status = args.get("employment_status")
+
+            # Get intake state from global_data
+            intake_state, global_data = self._get_intake_state(raw_data)
+
+            # Store in global_data
+            intake_state["employment_status"] = employment_status
+            intake_state["questions_answered"].append("employment")
+
+            print(f"💼 Collected employment: {employment_status}")
+
+            result = SwaigFunctionResult(
+                response="Thank you."
+            )
+
+            # Save state to global_data
+            return self._save_intake_state(result, intake_state, global_data)
+
+        except Exception as e:
+            print(f"❌ Error in collect_employment: {str(e)}")
+            return SwaigFunctionResult(response="Error collecting employment")
+
+    @AgentBase.tool(
+        name="collect_credit_card_debt",
+        purpose="Store credit card debt amount. Call this when user tells you their credit card debt.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "amount": {
+                    "type": "number",
+                    "description": "Credit card debt in dollars (use 0 if they say none)"
+                }
+            },
+            "required": ["amount"]
+        }
+    )
+    def collect_credit_card_debt(self, args, raw_data):
+        """Collect credit card debt"""
+        try:
+            amount = args.get("amount", 0)
+
+            # Get intake state from global_data
+            intake_state, global_data = self._get_intake_state(raw_data)
+
+            # Store in global_data
+            intake_state["credit_card_debt"] = float(amount)
+            intake_state["questions_answered"].append("credit_card_debt")
+
+            print(f"💳 Collected CC debt: ${amount:,.2f}")
+
+            result = SwaigFunctionResult(
+                response=f"Okay, ${amount:,.0f} in credit card debt."
+            )
+
+            # Save state to global_data
+            return self._save_intake_state(result, intake_state, global_data)
+
+        except Exception as e:
+            print(f"❌ Error in collect_credit_card_debt: {str(e)}")
+            return SwaigFunctionResult(response="Error collecting debt")
+
+    @AgentBase.tool(
+        name="collect_personal_loan_debt",
+        purpose="Store personal loan debt amount. Call this when user tells you their personal loan debt.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "amount": {
+                    "type": "number",
+                    "description": "Personal loan debt in dollars (use 0 if they say none)"
+                }
+            },
+            "required": ["amount"]
+        }
+    )
+    def collect_personal_loan_debt(self, args, raw_data):
+        """Collect personal loan debt"""
+        try:
+            amount = args.get("amount", 0)
+
+            # Get intake state from global_data
+            intake_state, global_data = self._get_intake_state(raw_data)
+
+            # Store in global_data
+            intake_state["personal_loan_debt"] = float(amount)
+            intake_state["questions_answered"].append("personal_loan_debt")
+
+            print(f"🏦 Collected personal loan debt: ${amount:,.2f}")
+
+            result = SwaigFunctionResult(response=f"Got it, ${amount:,.0f} in personal loans.")
+
+            # Save state to global_data
+            return self._save_intake_state(result, intake_state, global_data)
+
+        except Exception as e:
+            print(f"❌ Error in collect_personal_loan_debt: {str(e)}")
+            return SwaigFunctionResult(response="Error collecting debt")
+
+    @AgentBase.tool(
+        name="collect_other_debt",
+        purpose="Store medical bills and other debt. Call this when user tells you about other debts.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "amount": {
+                    "type": "number",
+                    "description": "Other debt in dollars (use 0 if they say none)"
+                }
+            },
+            "required": ["amount"]
+        }
+    )
+    def collect_other_debt(self, args, raw_data):
+        """Collect other debt (medical, etc.)"""
+        try:
+            amount = args.get("amount", 0)
+
+            # Get intake state from global_data
+            intake_state, global_data = self._get_intake_state(raw_data)
+
+            # Store in global_data
+            intake_state["other_debt"] = float(amount)
+            intake_state["questions_answered"].append("other_debt")
+
+            # Calculate total debt
+            total_debt = (
+                (intake_state.get("credit_card_debt") or 0) +
+                (intake_state.get("personal_loan_debt") or 0) +
+                (intake_state.get("other_debt") or 0)
+            )
+            intake_state["total_debt"] = total_debt
+
+            print(f"🏥 Collected other debt: ${amount:,.2f}")
+            print(f"📊 Total unsecured debt: ${total_debt:,.2f}")
+
+            result = SwaigFunctionResult(response=f"Thank you.")
+
+            # Save state to global_data
+            return self._save_intake_state(result, intake_state, global_data)
+
+        except Exception as e:
+            print(f"❌ Error in collect_other_debt: {str(e)}")
+            return SwaigFunctionResult(response="Error collecting debt")
+
+    @AgentBase.tool(
+        name="collect_monthly_income",
+        purpose="Store monthly income amount. Call this when user tells you their monthly income.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "amount": {
+                    "type": "number",
+                    "description": "Monthly income in dollars"
+                }
+            },
+            "required": ["amount"]
+        }
+    )
+    def collect_monthly_income(self, args, raw_data):
+        """Collect monthly income"""
+        try:
+            amount = args.get("amount")
+
+            # Get intake state from global_data
+            intake_state, global_data = self._get_intake_state(raw_data)
+
+            # Store in global_data
+            intake_state["monthly_income"] = float(amount)
+            intake_state["questions_answered"].append("monthly_income")
+
+            print(f"💵 Collected monthly income: ${amount:,.2f}")
+
+            result = SwaigFunctionResult(response=f"Thank you.")
+
+            # Save state to global_data
+            return self._save_intake_state(result, intake_state, global_data)
+
+        except Exception as e:
+            print(f"❌ Error in collect_monthly_income: {str(e)}")
+            return SwaigFunctionResult(response="Error collecting income")
+
+    @AgentBase.tool(
+        name="collect_ssn_last_four",
+        purpose="Store the last 4 digits of SSN. Call this when user provides their SSN digits.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "digits": {
+                    "type": "string",
+                    "description": "Last 4 digits of SSN as a string (e.g., '1234')"
+                }
+            },
+            "required": ["digits"]
+        }
+    )
+    def collect_ssn_last_four(self, args, raw_data):
+        """Collect SSN last 4 digits"""
+        try:
+            digits = str(args.get("digits"))
+
+            # Get intake state from global_data
+            intake_state, global_data = self._get_intake_state(raw_data)
+
+            # Store in global_data
+            intake_state["ssn_last_four"] = digits
+            intake_state["questions_answered"].append("ssn_last_four")
+
+            print(f"🔒 Collected SSN last 4: ***{digits}")
+            self._print_collected_data(intake_state)
+
+            result = SwaigFunctionResult(
+                response=""" Thank you. I have all the information I need.
+                I will connect you with a senior underwriter who will go over
+                your loan options in detail. Please hold for a moment while I transfer you."""
+            )
+
+            # Save state to global_data
+            self._save_intake_state(result, intake_state, global_data)
+
+            # End the call after transfer message
+            return result.hangup()
+
+        except Exception as e:
+            print(f"❌ Error in collect_ssn_last_four: {str(e)}")
+            return SwaigFunctionResult(response="Error collecting SSN").hangup()
+
+    # ============================================
+    # HELPER METHODS
+    # ============================================
+
+    def _print_collected_data(self, intake_state: dict):
+        """
+        Print all collected data to terminal for debugging/review.
+        """
+        print("\n" + "="*60)
+        print("📋 CALL INTAKE DATA SUMMARY")
+        print("="*60)
+        print(f"Call ID: {intake_state.get('call_id')}")
+        print(f"Phone Number: {intake_state.get('caller_number')}")
+        print(f"Lead Name: {intake_state.get('lead_name') or 'Not in CRM'}")
+        print("-"*60)
+
+        print("LOAN REQUEST:")
+        print(f"  Amount Requested: ${intake_state.get('loan_amount'):,.2f}" if intake_state.get('loan_amount') else "  Amount Requested: Not collected")
+        print(f"  Purpose: {intake_state.get('funds_purpose')}" if intake_state.get('funds_purpose') else "  Purpose: Not collected")
+        print(f"  Employment: {intake_state.get('employment_status')}" if intake_state.get('employment_status') else "  Employment: Not collected")
+
+        print("\nDEBT INFORMATION:")
+        print(f"  Credit Card Debt: ${intake_state.get('credit_card_debt'):,.2f}" if intake_state.get('credit_card_debt') is not None else "  Credit Card Debt: Not collected")
+        print(f"  Personal Loan Debt: ${intake_state.get('personal_loan_debt'):,.2f}" if intake_state.get('personal_loan_debt') is not None else "  Personal Loan Debt: Not collected")
+        print(f"  Other Debt: ${intake_state.get('other_debt'):,.2f}" if intake_state.get('other_debt') is not None else "  Other Debt: Not collected")
+        print(f"  TOTAL UNSECURED DEBT: ${intake_state.get('total_debt', 0):,.2f}")
+
+        print("\nINCOME:")
+        print(f"  Monthly Income: ${intake_state.get('monthly_income'):,.2f}" if intake_state.get('monthly_income') else "  Monthly Income: Not collected")
+
+        print("\nVERIFICATION:")
+        print(f"  SSN Last 4: ***{intake_state.get('ssn_last_four')}" if intake_state.get('ssn_last_four') else "  SSN Last 4: Not collected")
+
+        print("\nPROGRESS:")
+        print(f"  Questions Answered: {len(intake_state.get('questions_answered', []))}/8")
+        print(f"  Current Step: {intake_state.get('current_step')}")
+
+        print("="*60 + "\n")
+
+    # ============================================
+    # TRANSFER LOGIC
+    # ============================================
+
     async def execute_transfer(self, queue_did: str, call_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Execute call transfer to 3CX queue via Twilio SIP trunk"""
+        """
+        Execute call transfer to 3CX queue.
+
+        LEARNING: This is called after all data is collected.
+        It transfers the call to the appropriate queue based on debt amount.
+        """
         try:
             # Get transfer parameters from call router
             base_params = call_router.generate_transfer_params(queue_did)
-            
-            # Configure SIP transfer with additional settings
+
             transfer_config = {
-                **base_params,  # Include base transfer params
+                **base_params,
                 "announce": "Please hold while I connect you with a senior underwriter.",
-                "bridge_type": "SIP",  # Use SIP bridging for low latency
-                "call_data": call_data  # Include call data for context
+                "bridge_type": "SIP",
+                "call_data": call_data
             }
-            
-            logger.info(f"Executing transfer to {queue_did} with data: {call_data.get('call_id', 'unknown')}")
+
+            print(f"📞 Executing transfer to {queue_did}")
             return transfer_config
-            
+
         except Exception as e:
-            logger.error(f"Error executing transfer: {str(e)}")
+            print(f"❌ Error executing transfer: {str(e)}")
             raise
-
-

@@ -32,7 +32,7 @@ app.include_router(auth_router, prefix='/auth', tags=["auth"])
 # Create SignalWire Agent with proper route
 loan_intake_agent = LoanIntakeAgent()
 agent_router = loan_intake_agent.as_router()
-app.include_router(agent_router, tags=["Signalwire agent SDK"])
+app.include_router(agent_router, prefix="/webhook", tags=["Signalwire agent SDK"])
 
 
 
