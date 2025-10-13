@@ -24,24 +24,25 @@ class LoanIntakeAgent(AgentBase):
         self.add_language(
             name="English (US)",
             code="en-US",
-            voice="elevenlabs.rachel:eleven_flash_v2_5",
+            voice="elevenlabs.rachel:eleven_flash_v2_5"
         )
 
         # Set AI model parameters
-        self.set_params({
-            "ai_model": "gpt-4o-mini",
-            "temperature": 0.5,
-            "max_tokens": 200,
-        })
+        # self.set_params({
+        #     "ai_model": "gpt-4o-mini",
+        #     "temperature": 0.5,
+        #     "max_tokens": 200,
+        # })
 
         self.prompt_add_section(
             'personality',
-            """You are Jessica, a professional AI specialist for Easy Finance on a recorded line. You handle inbound calls from leads who received SMS loan offers.
+            """You are Jessica, a professional specialist for Easy Finance on a recorded line. You handle inbound calls from leads who received SMS loan offers.
 
             CRITICAL RULES:
             - Follow the intake script EXACTLY as written - do not add extra words or improvise
             - Ask ONE question at a time and WAIT for the caller's full response
-            - ALWAYS call the designated collection function immediately after receiving each answer
+            - MANDATORY: You MUST call the collection function IMMEDIATELY after receiving each answer - never skip this step
+            - The conversation CANNOT proceed until you call the required collection function for each step
             - Be professional, warm, and efficient
             - Keep your responses brief and natural
             """
@@ -77,15 +78,23 @@ class LoanIntakeAgent(AgentBase):
             "total_debt": 0.0,
 
             # Progress tracking
-            "questions_answered": [],
+            "answered": [],
         }
+        lead_data = global_data.get('caller_data', default_state)
+        for key, val in lead_data.items():
+            if val is None and key in lead_data['answered']:
+                lead_data['answered'].remove(key)
 
-        return global_data.get('intake_state', default_state), global_data
+        return lead_data , global_data
 
-    def _save_intake_state(self, result: SwaigFunctionResult, intake_state, global_data):
+    def _save_intake_state(self, result: SwaigFunctionResult, lead_data : dict, global_data):
         """Save intake state to global_data"""
+        # Remove duplicates while preserving order
+        if 'answered' in lead_data and isinstance(lead_data['answered'], list):
+            lead_data['answered'] = list(dict.fromkeys(lead_data['answered']))
         
-        global_data['intake_state'] = intake_state
+        print(" Lead Data: ", lead_data)
+        global_data['caller_data'] = lead_data
         result.update_global_data(global_data)
         return result
 
@@ -99,10 +108,11 @@ class LoanIntakeAgent(AgentBase):
             .add_section("Critical Rules", """
                 - Ask ONLY ONE question per step - never combine questions
                 - WAIT for the caller's complete response before proceeding
-                - MUST call the collection function immediately after receiving each answer
+                - IMMEDIATELY call the collection function after receiving each answer - this is MANDATORY
+                - Do NOT proceed to the next step until the collection function has been called
                 - Do NOT skip any steps or questions
                 - Do NOT add extra commentary, explanations, or questions
-                - Do not repeat questions
+                - Do not repeat questions if you get their answer
                 - Sequence: greeting → introduction → loan_amount → funds_purpose → employment → credit_card_debt → personal_loan_debt → other_debt → debt_summary → monthly_income → income_confirmation → ssn_last_four
             """)
         )
@@ -111,14 +121,16 @@ class LoanIntakeAgent(AgentBase):
         # STEP 1: GREETING
         # ============================================
         intake_context.add_step("greeting") \
-            .add_section("Current Task", "Greet the caller personally using CRM data if available") \
+            .add_section("Current Task", "Greet the caller and collect their name") \
             .add_bullets("Process", [
-                "If CRM data found: Say EXACTLY 'Hi, this is Jessica with Easy Finance on a recorded line. Am I speaking with [Lead Name]? Are you calling regarding the loan offer for $[Loan Amount] you received?'",
-                "If NO CRM data: Say 'Hi, this is Jessica with Easy Finance on a recorded line. How can I help you today?'",
-                "WAIT for their confirmation/response",
-                "Once they respond, move immediately to introduction"
+                "Say: 'Hi, this is Jessica with Easy Finance on a recorded line. May I have your name please?'",
+                "WAIT for their name response",
+                "NEVER use numbers or phone numbers as a name",
+                "REMEMBER to call collect_caller_name function after they tell their name",
+                "Do NOT move to next step until function is called"
             ]) \
-            .set_step_criteria("Caller has been greeted with personalized or generic greeting") \
+            .set_step_criteria("collect_caller_name function called successfully") \
+            .set_functions(["collect_caller_name"]) \
             .set_valid_steps(["introduction"])
 
         # ============================================
@@ -128,7 +140,6 @@ class LoanIntakeAgent(AgentBase):
             .add_section("Current Task", "Explain the automated intake system") \
             .add_bullets("Process", [
                 "Say EXACTLY: 'This is our secured automated intake system. It's built to make our process quick, private, and fully personalized. I'll ask a few short questions to confirm eligibility and then connect you to a senior underwriting specialist to review your actual loan options.'",
-                "Do NOT wait for response - move immediately to loan_amount step"
             ]) \
             .set_step_criteria("Introduction script delivered") \
             .set_valid_steps(["loan_amount"])
@@ -141,7 +152,9 @@ class LoanIntakeAgent(AgentBase):
             .add_bullets("Process", [
                 "Ask EXACTLY: 'What is the exact amount you are looking to borrow today?'",
                 "WAIT for their response",
-                "Do NOT add extra commentary"
+                "Do NOT add extra commentary",
+                "IMMEDIATELY call collect_loan_amount function with the amount they provided",
+                "CRITICAL: Do NOT move to next step until function is called"
             ]) \
             .set_step_criteria("collect_loan_amount function called successfully") \
             .set_functions(["collect_loan_amount"]) \
@@ -155,7 +168,9 @@ class LoanIntakeAgent(AgentBase):
             .add_bullets("Process", [
                 "Ask EXACTLY: 'Just so I know how to help best, what are you planning to use the funds for?'",
                 "WAIT for their explanation",
-                "Do NOT add extra commentary"
+                "Do NOT add extra commentary",
+                "IMMEDIATELY call collect_funds_purpose function after they explain the purpose",
+                "Do NOT move to next step until function is called"
             ]) \
             .set_step_criteria("collect_funds_purpose function called successfully") \
             .set_functions(["collect_funds_purpose"]) \
@@ -169,7 +184,9 @@ class LoanIntakeAgent(AgentBase):
             .add_bullets("Process", [
                 "Ask EXACTLY: 'And are you currently earning a paycheck, self-employed, or on a fixed income?'",
                 "WAIT for their employment type",
-                "Do NOT add extra commentary"
+                "Do NOT add extra commentary",
+                "IMMEDIATELY call collect_employment function after they tell their employment status",
+                "Do NOT move to next step until function is called"
             ]) \
             .set_step_criteria("collect_employment function called successfully") \
             .set_functions(["collect_employment"]) \
@@ -183,7 +200,9 @@ class LoanIntakeAgent(AgentBase):
             .add_bullets("Process", [
                 "Ask EXACTLY: 'About how much total unsecured credit card debt are you carrying right now?'",
                 "WAIT for the amount (use 0 if they say none)",
-                "Do NOT add extra commentary"
+                "Do NOT add extra commentary",
+                "IMMEDIATELY call collect_credit_card_debt function after they provide the amount",
+                "Do NOT move to next step until function is called"
             ]) \
             .set_step_criteria("collect_credit_card_debt function called successfully") \
             .set_functions(["collect_credit_card_debt"]) \
@@ -197,7 +216,9 @@ class LoanIntakeAgent(AgentBase):
             .add_bullets("Process", [
                 "Ask EXACTLY: 'And do you have any balances on unsecured personal loans?'",
                 "WAIT for the amount (use 0 if they say no)",
-                "Do NOT add extra commentary"
+                "Do NOT add extra commentary",
+                "IMMEDIATELY call collect_personal_loan_debt function after they provide the amount",
+                "Do NOT move to next step until function is called"
             ]) \
             .set_step_criteria("collect_personal_loan_debt function called successfully") \
             .set_functions(["collect_personal_loan_debt"]) \
@@ -211,7 +232,9 @@ class LoanIntakeAgent(AgentBase):
             .add_bullets("Process", [
                 "Ask EXACTLY: 'How about medical bills or any other balances you're aware of?'",
                 "WAIT for the amount (use 0 if they say none)",
-                "Do NOT add extra commentary"
+                "Do NOT add extra commentary",
+                "IMMEDIATELY call collect_other_debt function after they provide the amount",
+                "Do NOT move to next step until function is called"
             ]) \
             .set_step_criteria("collect_other_debt function called successfully") \
             .set_functions(["collect_other_debt"]) \
@@ -238,7 +261,9 @@ class LoanIntakeAgent(AgentBase):
             .add_bullets("Process", [
                 "Ask EXACTLY: 'Now, can you please provide your monthly income amount?'",
                 "WAIT for the dollar amount",
-                "Do NOT add extra commentary"
+                "Do NOT add extra commentary",
+                "IMMEDIATELY call collect_monthly_income function after they tell their monthly income",
+                "Do NOT move to next step until function is called"
             ]) \
             .set_step_criteria("collect_monthly_income function called successfully") \
             .set_functions(["collect_monthly_income"]) \
@@ -253,7 +278,6 @@ class LoanIntakeAgent(AgentBase):
                 "Say EXACTLY: 'Thank you for that information. Just to confirm, your total monthly income is $[amount].'",
                 "Use the ACTUAL income amount collected",
                 "WAIT for their confirmation (yes/okay/correct)",
-                "Once confirmed, move to ssn_last_four"
             ]) \
             .set_step_criteria("Income confirmed by caller") \
             .set_valid_steps(["ssn_last_four"])
@@ -266,7 +290,9 @@ class LoanIntakeAgent(AgentBase):
             .add_bullets("Process", [
                 "Say EXACTLY: 'Now I will need your last 4 digits of your Social Security number to securely match your file and verify your identity. This will not impact your credit and does not count as an inquiry because it's a soft credit pull. Can you provide those last 4 digits?'",
                 "WAIT for exactly 4 digits",
-                "Do NOT add extra commentary"
+                "Do NOT add extra commentary",
+                "IMMEDIATELY call collect_ssn_last_four function with the 4 digits they provided",
+                "CRITICAL: Do NOT move to next step until function is called"
             ]) \
             .set_step_criteria("collect_ssn_last_four function called successfully") \
             .set_functions(["collect_ssn_last_four"]) \
@@ -282,6 +308,7 @@ class LoanIntakeAgent(AgentBase):
                 "Do NOT wait for response - call will be transferred automatically"
             ]) \
             .set_step_criteria("Transfer message delivered") \
+            .set_functions(['transfer_call']) \
             .set_valid_steps([])  # End of flow
 
     # ============================================
@@ -293,11 +320,10 @@ class LoanIntakeAgent(AgentBase):
         Called when a call first comes in (SignalWire's actual lifecycle hook).
         """
         try:
-            # Extract call information from request_data
             if request_data and 'call' in request_data:
                 call_info = request_data['call']
                 call_id = call_info.get('call_id', 'unknown')
-                caller_number = call_info.get('from_number', call_info.get('from', '')).replace("+1", "")
+                caller_number = call_info.get('from_number', call_info.get('from', ''))
 
                 print(f"📞 Call ID: {call_id}")
                 print(f"📞 From Number: {caller_number}")
@@ -312,9 +338,7 @@ class LoanIntakeAgent(AgentBase):
 
         except Exception as e:
             print(f"❌ Error in on_swml_request: {str(e)}")
-            print(f"❌ Error in on_swml_request: {str(e)}")
 
-        # IMPORTANT: Call parent implementation to continue normal SWML flow
         return super().on_swml_request(request_data, callback_path, request)
 
 
@@ -323,14 +347,47 @@ class LoanIntakeAgent(AgentBase):
     # ============================================
 
     @AgentBase.tool(
+        name="collect_caller_name",
+        description="Store the caller's name after they tell you their name in the greeting step. Call this immediately when the user provides their name.",
+        parameters={
+            "type":"object",
+            "properties":{
+                "caller_name":{
+                    "type":"string",
+                    "description":"The caller's first name or full name (e.g., 'John', 'Mary Smith')"
+                }
+            },
+            "required":['caller_name']
+        }
+    )
+    def collect_caller_name(self, args, raw_data):
+        try:
+            caller_name = args.get('caller_name')
+            intake_state, global_data = self._get_intake_state(raw_data)
+
+            intake_state['lead_name'] = str(caller_name)
+            intake_state['answered'].append('caller_name')
+
+            print(f'👤 Collected Caller Name: {caller_name}')
+
+            result = SwaigFunctionResult(
+                response=f"Collected caller name: {caller_name}."
+            )
+            return self._save_intake_state(result, intake_state, global_data)
+            
+        except Exception as e:
+            print(f"❌ Error in collect_caller_name: {str(e)}")
+            return SwaigFunctionResult(response="Could not collect name.")
+
+    @AgentBase.tool(
         name="collect_loan_amount",
-        purpose="Extract and store the loan amount from the user's response. Call this when the user tells you how much they want to borrow.",
+        description="collect the loan amount in the caller data.",
         parameters={
             "type": "object",
             "properties": {
                 "amount": {
-                    "type": "number",
-                    "description": "The loan amount in dollars (e.g., 15000 for $15,000)"
+                    "type": ["number", "string"],
+                    "description": "The loan amount in dollars (e.g., 15000, '15000', or '$15,000')"
                 }
             },
             "required": ["amount"]
@@ -340,12 +397,10 @@ class LoanIntakeAgent(AgentBase):
         try:
             amount = args.get("amount")
 
-            # Get intake state from global_data
             intake_state, global_data = self._get_intake_state(raw_data)
 
-            # Store in global_data
             intake_state["loan_amount"] = float(amount)
-            intake_state["questions_answered"].append("loan_amount")
+            intake_state["answered"].append("loan_amount")
 
             print(f"💰 Collected loan amount: ${amount:,.2f}")
 
@@ -353,7 +408,6 @@ class LoanIntakeAgent(AgentBase):
                 response=f"Got it, ${amount:,.0f}."
             )
 
-            # Save state to global_data
             return self._save_intake_state(result, intake_state, global_data)
 
         except Exception as e:
@@ -362,7 +416,7 @@ class LoanIntakeAgent(AgentBase):
 
     @AgentBase.tool(
         name="collect_funds_purpose",
-        purpose="Store what the user plans to use the loan for. Call this after they explain their purpose.",
+        description="Collect the purpose of the loan amount in caller data.",
         parameters={
             "type": "object",
             "properties": {
@@ -379,12 +433,10 @@ class LoanIntakeAgent(AgentBase):
         try:
             purpose = args.get("purpose")
 
-            # Get intake state from global_data
             intake_state, global_data = self._get_intake_state(raw_data)
 
-            # Store in global_data
             intake_state["funds_purpose"] = purpose
-            intake_state["questions_answered"].append("funds_purpose")
+            intake_state["answered"].append("funds_purpose")
 
             print(f"🎯 Collected purpose: {purpose}")
 
@@ -392,7 +444,6 @@ class LoanIntakeAgent(AgentBase):
                 response=f"Understood, for {purpose}."
             )
 
-            # Save state to global_data
             return self._save_intake_state(result, intake_state, global_data)
 
         except Exception as e:
@@ -401,7 +452,7 @@ class LoanIntakeAgent(AgentBase):
 
     @AgentBase.tool(
         name="collect_employment",
-        purpose="Store the employment status. Call this after the user tells you about their employment.",
+        description="Collect the employment status of the caller in caller data.",
         parameters={
             "type": "object",
             "properties": {
@@ -418,12 +469,10 @@ class LoanIntakeAgent(AgentBase):
         try:
             employment_status = args.get("employment_status")
 
-            # Get intake state from global_data
             intake_state, global_data = self._get_intake_state(raw_data)
 
-            # Store in global_data
             intake_state["employment_status"] = employment_status
-            intake_state["questions_answered"].append("employment")
+            intake_state["answered"].append("employment")
 
             print(f"💼 Collected employment: {employment_status}")
 
@@ -431,7 +480,6 @@ class LoanIntakeAgent(AgentBase):
                 response="Thank you."
             )
 
-            # Save state to global_data
             return self._save_intake_state(result, intake_state, global_data)
 
         except Exception as e:
@@ -440,13 +488,13 @@ class LoanIntakeAgent(AgentBase):
 
     @AgentBase.tool(
         name="collect_credit_card_debt",
-        purpose="Store credit card debt amount. Call this when user tells you their credit card debt.",
+        description="Collect the credit card debt of the caller in caller data.",
         parameters={
             "type": "object",
             "properties": {
                 "amount": {
                     "type": "number",
-                    "description": "Credit card debt in dollars (use 0 if they say none)"
+                    "description": "Credit card debt in dollars (use 0 if they say none, no, or zero)"
                 }
             },
             "required": ["amount"]
@@ -457,12 +505,10 @@ class LoanIntakeAgent(AgentBase):
         try:
             amount = args.get("amount", 0)
 
-            # Get intake state from global_data
             intake_state, global_data = self._get_intake_state(raw_data)
 
-            # Store in global_data
             intake_state["credit_card_debt"] = float(amount)
-            intake_state["questions_answered"].append("credit_card_debt")
+            intake_state["answered"].append("credit_card_debt")
 
             print(f"💳 Collected CC debt: ${amount:,.2f}")
 
@@ -479,13 +525,13 @@ class LoanIntakeAgent(AgentBase):
 
     @AgentBase.tool(
         name="collect_personal_loan_debt",
-        purpose="Store personal loan debt amount. Call this when user tells you their personal loan debt.",
+        description="collect personal loan debt of the caller in caller data.",
         parameters={
             "type": "object",
             "properties": {
                 "amount": {
                     "type": "number",
-                    "description": "Personal loan debt in dollars (use 0 if they say none)"
+                    "description": "Personal loan debt in dollars (use 0 if they say none, no, or zero)"
                 }
             },
             "required": ["amount"]
@@ -501,7 +547,7 @@ class LoanIntakeAgent(AgentBase):
 
             # Store in global_data
             intake_state["personal_loan_debt"] = float(amount)
-            intake_state["questions_answered"].append("personal_loan_debt")
+            intake_state["answered"].append("personal_loan_debt")
 
             print(f"🏦 Collected personal loan debt: ${amount:,.2f}")
 
@@ -516,13 +562,13 @@ class LoanIntakeAgent(AgentBase):
 
     @AgentBase.tool(
         name="collect_other_debt",
-        purpose="Store medical bills and other debt. Call this when user tells you about other debts.",
+        description="Collect the other debt of the caller in caller data.",
         parameters={
             "type": "object",
             "properties": {
                 "amount": {
                     "type": "number",
-                    "description": "Other debt in dollars (use 0 if they say none)"
+                    "description": "Medical bills and other debt in dollars (use 0 if they say none, no, or zero)"
                 }
             },
             "required": ["amount"]
@@ -538,7 +584,7 @@ class LoanIntakeAgent(AgentBase):
 
             # Store in global_data
             intake_state["other_debt"] = float(amount)
-            intake_state["questions_answered"].append("other_debt")
+            intake_state["answered"].append("other_debt")
 
             # Calculate total debt
             total_debt = (
@@ -562,13 +608,13 @@ class LoanIntakeAgent(AgentBase):
 
     @AgentBase.tool(
         name="collect_monthly_income",
-        purpose="Store monthly income amount. Call this when user tells you their monthly income.",
+        description="Collect the monthly income of the caller in caller data.",
         parameters={
             "type": "object",
             "properties": {
                 "amount": {
                     "type": "number",
-                    "description": "Monthly income in dollars"
+                    "description": "Monthly income in dollars (e.g., 5000 for $5,000/month)"
                 }
             },
             "required": ["amount"]
@@ -584,7 +630,7 @@ class LoanIntakeAgent(AgentBase):
 
             # Store in global_data
             intake_state["monthly_income"] = float(amount)
-            intake_state["questions_answered"].append("monthly_income")
+            intake_state["answered"].append("monthly_income")
 
             print(f"💵 Collected monthly income: ${amount:,.2f}")
 
@@ -599,13 +645,13 @@ class LoanIntakeAgent(AgentBase):
 
     @AgentBase.tool(
         name="collect_ssn_last_four",
-        purpose="Store the last 4 digits of SSN. Call this when user provides their SSN digits.",
+        description="collect the social security number (SSN) last four digits of the caller in caller data.",
         parameters={
             "type": "object",
             "properties": {
                 "digits": {
                     "type": "string",
-                    "description": "Last 4 digits of SSN as a string (e.g., '1234')"
+                    "description": "Last 4 digits of SSN as a string (e.g., '1234'). Must be exactly 4 digits."
                 }
             },
             "required": ["digits"]
@@ -621,27 +667,32 @@ class LoanIntakeAgent(AgentBase):
 
             # Store in global_data
             intake_state["ssn_last_four"] = digits
-            intake_state["questions_answered"].append("ssn_last_four")
+            intake_state["answered"].append("ssn_last_four")
 
             print(f"🔒 Collected SSN last 4: ***{digits}")
             self._print_collected_data(intake_state)
 
             result = SwaigFunctionResult(
-                response=""" Thank you. I have all the information I need.
-                I will connect you with a senior underwriter who will go over
-                your loan options in detail. Please hold for a moment while I transfer you."""
+                response="""Collected social security number."""
             )
-
-            # Save state to global_data
-            self._save_intake_state(result, intake_state, global_data)
-
-            # End the call after transfer message
-            return result.hangup()
+            saved = self._save_intake_state(result, intake_state, global_data)
+            return saved
 
         except Exception as e:
             print(f"❌ Error in collect_ssn_last_four: {str(e)}")
             return SwaigFunctionResult(response="Error collecting SSN").hangup()
 
+    @AgentBase.tool(
+        name='transfer_call',
+        description='transfer the call.',
+    )
+    def transfer_call(self, args, raw_data):
+        result = SwaigFunctionResult(
+            "Thank you! I appreciate your patience. Now that I have all the necessary information, I will connect you with a senior underwriter who will go over your loan options in detail. Please hold for a moment while I transfer you."
+        )
+        return result.hangup()
+    
+    
     # ============================================
     # HELPER METHODS
     # ============================================
@@ -676,7 +727,7 @@ class LoanIntakeAgent(AgentBase):
         print(f"  SSN Last 4: ***{intake_state.get('ssn_last_four')}" if intake_state.get('ssn_last_four') else "  SSN Last 4: Not collected")
 
         print("\nPROGRESS:")
-        print(f"  Questions Answered: {len(intake_state.get('questions_answered', []))}/8")
+        print(f"  Questions Answered: {len(intake_state.get('answered', []))}/8")
         print(f"  Current Step: {intake_state.get('current_step')}")
 
         print("="*60 + "\n")
