@@ -1,15 +1,45 @@
 from signalwire_agents import AgentBase, SwaigFunctionResult
 from app.services.call_router import call_router
+from app.services.call_record_service import call_record_service
+from app.models.call_records import TransferTier, DisconnectionReason
 from app.config import settings
 import logging
-from typing import Dict, Any
+import asyncio
+from typing import Dict, Any, Optional, List
 
 logger = logging.getLogger(__name__)
+
+# DNC (Do Not Call) detection phrases
+DNC_PHRASES = [
+    "remove me from the list",
+    "remove me from your list",
+    "take me off the list",
+    "take me off your list",
+    "stop calling me",
+    "stop calling",
+    "do not call",
+    "don't call me",
+    "don't call",
+    "quit calling",
+    "remove my number",
+    "delete my number",
+    "unsubscribe",
+    "opt out",
+    "opt-out",
+    "no more calls",
+    "never call again",
+    "put me on do not call",
+    "add me to do not call",
+]
 
 
 class LoanIntakeAgent(AgentBase):
     """
     AI Voice Agent for loan intake with structured conversation flow.
+    Features:
+    - 3-tier transfer routing based on total debt
+    - DNC phrase detection
+    - Comprehensive data collection
     """
 
     def __init__(self, **kwargs):
@@ -27,13 +57,6 @@ class LoanIntakeAgent(AgentBase):
             voice="elevenlabs.rachel:eleven_flash_v2_5"
         )
 
-        # Set AI model parameters
-        # self.set_params({
-        #     "ai_model": "gpt-4o-mini",
-        #     "temperature": 0.5,
-        #     "max_tokens": 200,
-        # })
-
         self.prompt_add_section(
             'personality',
             """You are Jessica, a professional specialist for Easy Finance on a recorded line. You handle inbound calls from leads who received SMS loan offers.
@@ -45,6 +68,8 @@ class LoanIntakeAgent(AgentBase):
             - The conversation CANNOT proceed until you call the required collection function for each step
             - Be professional, warm, and efficient
             - Keep your responses brief and natural
+            - If the caller says anything like "remove me from the list", "stop calling", "do not call", etc., 
+              IMMEDIATELY call the handle_dnc_request function
             """
         )
 
@@ -63,6 +88,10 @@ class LoanIntakeAgent(AgentBase):
             "call_id": raw_data.get("call_id"),
             "caller_number": raw_data.get("caller_id_num", "").replace("+1", ""),
             "lead_name": None,
+            
+            # Multi-tenant tracking
+            "client_id": None,
+            "agent_id": None,
 
             # Question answers (all nullable initially)
             "loan_amount": None,
@@ -76,30 +105,65 @@ class LoanIntakeAgent(AgentBase):
 
             # Calculated values
             "total_debt": 0.0,
+            
+            # Transfer tracking
+            "transfer_tier": None,
+            "transfer_did": None,
+            "transfer_initiated": False,
+            
+            # DNC tracking
+            "is_dnc": False,
+            "dnc_phrase": None,
 
             # Progress tracking
             "answered": [],
         }
         lead_data = global_data.get('caller_data', default_state)
-        for key, val in lead_data.items():
-            if val is None and key in lead_data['answered']:
-                lead_data['answered'].remove(key)
+        
+        # Clean up answered list
+        if 'answered' in lead_data and isinstance(lead_data['answered'], list):
+            for key, val in lead_data.items():
+                if val is None and key in lead_data['answered']:
+                    lead_data['answered'].remove(key)
 
-        return lead_data , global_data
+        return lead_data, global_data
 
-    def _save_intake_state(self, result: SwaigFunctionResult, lead_data : dict, global_data):
+    def _save_intake_state(self, result: SwaigFunctionResult, lead_data: dict, global_data):
         """Save intake state to global_data"""
         # Remove duplicates while preserving order
         if 'answered' in lead_data and isinstance(lead_data['answered'], list):
             lead_data['answered'] = list(dict.fromkeys(lead_data['answered']))
         
-        print(" Lead Data: ", lead_data)
+        logger.info(f"Saving intake state: {lead_data}")
         global_data['caller_data'] = lead_data
         result.update_global_data(global_data)
         return result
 
-    def _setup_conversation_flow(self):
+    def _check_for_dnc(self, text: str) -> Optional[str]:
+        """Check if text contains DNC phrases. Returns the detected phrase or None."""
+        if not text:
+            return None
+        text_lower = text.lower()
+        for phrase in DNC_PHRASES:
+            if phrase in text_lower:
+                return phrase
+        return None
 
+    def _calculate_total_debt(self, intake_state: dict) -> float:
+        """Calculate total unsecured debt from intake state"""
+        return (
+            float(intake_state.get("credit_card_debt") or 0) +
+            float(intake_state.get("personal_loan_debt") or 0) +
+            float(intake_state.get("other_debt") or 0)
+        )
+
+    def _determine_transfer_info(self, intake_state: dict) -> Dict[str, Any]:
+        """Determine transfer tier and DID based on total debt"""
+        total_debt = self._calculate_total_debt(intake_state)
+        transfer_info = call_router.get_transfer_info(total_debt)
+        return transfer_info
+
+    def _setup_conversation_flow(self):
         # Define contexts (conversation containers)
         contexts = self.define_contexts()
         intake_context = (
@@ -113,6 +177,7 @@ class LoanIntakeAgent(AgentBase):
                 - Do NOT skip any steps or questions
                 - Do NOT add extra commentary, explanations, or questions
                 - Do not repeat questions if you get their answer
+                - If caller requests to be removed from calling list, call handle_dnc_request immediately
                 - Sequence: greeting → introduction → loan_amount → funds_purpose → employment → credit_card_debt → personal_loan_debt → other_debt → debt_summary → monthly_income → income_confirmation → ssn_last_four
             """)
         )
@@ -127,10 +192,11 @@ class LoanIntakeAgent(AgentBase):
                 "WAIT for their name response",
                 "NEVER use numbers or phone numbers as a name",
                 "REMEMBER to call collect_caller_name function after they tell their name",
-                "Do NOT move to next step until function is called"
+                "Do NOT move to next step until function is called",
+                "If they ask to be removed from the list, call handle_dnc_request immediately"
             ]) \
             .set_step_criteria("collect_caller_name function called successfully") \
-            .set_functions(["collect_caller_name"]) \
+            .set_functions(["collect_caller_name", "handle_dnc_request"]) \
             .set_valid_steps(["introduction"])
 
         # ============================================
@@ -142,6 +208,7 @@ class LoanIntakeAgent(AgentBase):
                 "Say EXACTLY: 'This is our secured automated intake system. It's built to make our process quick, private, and fully personalized. I'll ask a few short questions to confirm eligibility and then connect you to a senior underwriting specialist to review your actual loan options.'",
             ]) \
             .set_step_criteria("Introduction script delivered") \
+            .set_functions(["handle_dnc_request"]) \
             .set_valid_steps(["loan_amount"])
 
         # ============================================
@@ -157,7 +224,7 @@ class LoanIntakeAgent(AgentBase):
                 "CRITICAL: Do NOT move to next step until function is called"
             ]) \
             .set_step_criteria("collect_loan_amount function called successfully") \
-            .set_functions(["collect_loan_amount"]) \
+            .set_functions(["collect_loan_amount", "handle_dnc_request"]) \
             .set_valid_steps(["funds_purpose"])
 
         # ============================================
@@ -173,7 +240,7 @@ class LoanIntakeAgent(AgentBase):
                 "Do NOT move to next step until function is called"
             ]) \
             .set_step_criteria("collect_funds_purpose function called successfully") \
-            .set_functions(["collect_funds_purpose"]) \
+            .set_functions(["collect_funds_purpose", "handle_dnc_request"]) \
             .set_valid_steps(["employment"])
 
         # ============================================
@@ -189,7 +256,7 @@ class LoanIntakeAgent(AgentBase):
                 "Do NOT move to next step until function is called"
             ]) \
             .set_step_criteria("collect_employment function called successfully") \
-            .set_functions(["collect_employment"]) \
+            .set_functions(["collect_employment", "handle_dnc_request"]) \
             .set_valid_steps(["credit_card_debt"])
 
         # ============================================
@@ -205,7 +272,7 @@ class LoanIntakeAgent(AgentBase):
                 "Do NOT move to next step until function is called"
             ]) \
             .set_step_criteria("collect_credit_card_debt function called successfully") \
-            .set_functions(["collect_credit_card_debt"]) \
+            .set_functions(["collect_credit_card_debt", "handle_dnc_request"]) \
             .set_valid_steps(["personal_loan_debt"])
 
         # ============================================
@@ -221,7 +288,7 @@ class LoanIntakeAgent(AgentBase):
                 "Do NOT move to next step until function is called"
             ]) \
             .set_step_criteria("collect_personal_loan_debt function called successfully") \
-            .set_functions(["collect_personal_loan_debt"]) \
+            .set_functions(["collect_personal_loan_debt", "handle_dnc_request"]) \
             .set_valid_steps(["other_debt"])
 
         # ============================================
@@ -237,7 +304,7 @@ class LoanIntakeAgent(AgentBase):
                 "Do NOT move to next step until function is called"
             ]) \
             .set_step_criteria("collect_other_debt function called successfully") \
-            .set_functions(["collect_other_debt"]) \
+            .set_functions(["collect_other_debt", "handle_dnc_request"]) \
             .set_valid_steps(["debt_summary"])
 
         # ============================================
@@ -251,6 +318,7 @@ class LoanIntakeAgent(AgentBase):
                 "Do NOT wait for response - move immediately to monthly_income"
             ]) \
             .set_step_criteria("Debt summary delivered") \
+            .set_functions(["handle_dnc_request"]) \
             .set_valid_steps(["monthly_income"])
 
         # ============================================
@@ -266,7 +334,7 @@ class LoanIntakeAgent(AgentBase):
                 "Do NOT move to next step until function is called"
             ]) \
             .set_step_criteria("collect_monthly_income function called successfully") \
-            .set_functions(["collect_monthly_income"]) \
+            .set_functions(["collect_monthly_income", "handle_dnc_request"]) \
             .set_valid_steps(["income_confirmation"])
 
         # ============================================
@@ -280,6 +348,7 @@ class LoanIntakeAgent(AgentBase):
                 "WAIT for their confirmation (yes/okay/correct)",
             ]) \
             .set_step_criteria("Income confirmed by caller") \
+            .set_functions(["handle_dnc_request"]) \
             .set_valid_steps(["ssn_last_four"])
 
         # ============================================
@@ -295,7 +364,7 @@ class LoanIntakeAgent(AgentBase):
                 "CRITICAL: Do NOT move to next step until function is called"
             ]) \
             .set_step_criteria("collect_ssn_last_four function called successfully") \
-            .set_functions(["collect_ssn_last_four"]) \
+            .set_functions(["collect_ssn_last_four", "handle_dnc_request"]) \
             .set_valid_steps(["transfer"])
 
         # ============================================
@@ -305,6 +374,7 @@ class LoanIntakeAgent(AgentBase):
             .add_section("Current Task", "Deliver transfer message from script") \
             .add_bullets("Process", [
                 "Say EXACTLY: 'Thank you, I appreciate your patience. Now that I have all the necessary information, I will connect you with a senior underwriter who will go over your loan options in detail. Please hold for a moment while I transfer you.'",
+                "Call transfer_call function to initiate the transfer",
                 "Do NOT wait for response - call will be transferred automatically"
             ]) \
             .set_step_criteria("Transfer message delivered") \
@@ -325,19 +395,13 @@ class LoanIntakeAgent(AgentBase):
                 call_id = call_info.get('call_id', 'unknown')
                 caller_number = call_info.get('from_number', call_info.get('from', ''))
 
-                print(f"📞 Call ID: {call_id}")
-                print(f"📞 From Number: {caller_number}")
-                print(f"📞 Call started: {call_id} from {caller_number}")
+                logger.info(f"📞 Call started: {call_id} from {caller_number}")
 
-                # TODO: When CRM is ready, lookup lead by phone and store in global_data
-                # lead_info = crm_service.lookup_lead_by_phone(caller_number)
                 # Initial global_data will be set up via _get_intake_state() in first SWAIG call
-
-                print(f"✅ Call session started - state will be managed in global_data")
-                print(f"✅ Call session started for {call_id}")
+                logger.info(f"✅ Call session started - state will be managed in global_data")
 
         except Exception as e:
-            print(f"❌ Error in on_swml_request: {str(e)}")
+            logger.error(f"❌ Error in on_swml_request: {str(e)}")
 
         return super().on_swml_request(request_data, callback_path, request)
 
@@ -347,17 +411,72 @@ class LoanIntakeAgent(AgentBase):
     # ============================================
 
     @AgentBase.tool(
+        name="handle_dnc_request",
+        description="Handle a Do Not Call (DNC) request when the caller asks to be removed from the calling list. Call this immediately if the caller says things like 'remove me from the list', 'stop calling', 'do not call', etc.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "phrase_detected": {
+                    "type": "string",
+                    "description": "The phrase the caller used to request removal (e.g., 'remove me from the list')"
+                }
+            },
+            "required": ["phrase_detected"]
+        }
+    )
+    def handle_dnc_request(self, args, raw_data):
+        """Handle DNC request - flag caller and end call gracefully"""
+        try:
+            phrase = args.get('phrase_detected', 'DNC request')
+            intake_state, global_data = self._get_intake_state(raw_data)
+            
+            # Flag as DNC
+            intake_state['is_dnc'] = True
+            intake_state['dnc_phrase'] = phrase
+            
+            logger.warning(f"🚫 DNC Request detected: '{phrase}' from {intake_state.get('caller_number')}")
+            
+            # Save call record to database with DNC flag (async in background)
+            call_id = intake_state.get("call_id")
+            if call_id:
+                asyncio.create_task(
+                    call_record_service.save_call_record(
+                        call_sid=call_id,
+                        intake_state=intake_state,
+                        client_id=intake_state.get("client_id"),
+                        agent_id=intake_state.get("agent_id")
+                    )
+                )
+            
+            result = SwaigFunctionResult(
+                response="I understand. I've noted your request and you've been added to our do not call list. "
+                         "You will not receive any further calls from us. Have a good day."
+            )
+            
+            # Save state before ending
+            self._save_intake_state(result, intake_state, global_data)
+            
+            # End the call gracefully
+            return result.hangup()
+            
+        except Exception as e:
+            logger.error(f"❌ Error handling DNC request: {str(e)}")
+            return SwaigFunctionResult(
+                response="I've noted your request. You will not receive any further calls. Goodbye."
+            ).hangup()
+
+    @AgentBase.tool(
         name="collect_caller_name",
         description="Store the caller's name after they tell you their name in the greeting step. Call this immediately when the user provides their name.",
         parameters={
-            "type":"object",
-            "properties":{
-                "caller_name":{
-                    "type":"string",
-                    "description":"The caller's first name or full name (e.g., 'John', 'Mary Smith')"
+            "type": "object",
+            "properties": {
+                "caller_name": {
+                    "type": "string",
+                    "description": "The caller's first name or full name (e.g., 'John', 'Mary Smith')"
                 }
             },
-            "required":['caller_name']
+            "required": ['caller_name']
         }
     )
     def collect_caller_name(self, args, raw_data):
@@ -368,7 +487,7 @@ class LoanIntakeAgent(AgentBase):
             intake_state['lead_name'] = str(caller_name)
             intake_state['answered'].append('caller_name')
 
-            print(f'👤 Collected Caller Name: {caller_name}')
+            logger.info(f'👤 Collected Caller Name: {caller_name}')
 
             result = SwaigFunctionResult(
                 response=f"Collected caller name: {caller_name}."
@@ -376,12 +495,12 @@ class LoanIntakeAgent(AgentBase):
             return self._save_intake_state(result, intake_state, global_data)
             
         except Exception as e:
-            print(f"❌ Error in collect_caller_name: {str(e)}")
+            logger.error(f"❌ Error in collect_caller_name: {str(e)}")
             return SwaigFunctionResult(response="Could not collect name.")
 
     @AgentBase.tool(
         name="collect_loan_amount",
-        description="collect the loan amount in the caller data.",
+        description="Collect the loan amount in the caller data.",
         parameters={
             "type": "object",
             "properties": {
@@ -396,13 +515,16 @@ class LoanIntakeAgent(AgentBase):
     def collect_loan_amount(self, args, raw_data):
         try:
             amount = args.get("amount")
-
+            # Clean the amount if it's a string
+            if isinstance(amount, str):
+                amount = float(amount.replace('$', '').replace(',', ''))
+            
             intake_state, global_data = self._get_intake_state(raw_data)
 
             intake_state["loan_amount"] = float(amount)
             intake_state["answered"].append("loan_amount")
 
-            print(f"💰 Collected loan amount: ${amount:,.2f}")
+            logger.info(f"💰 Collected loan amount: ${amount:,.2f}")
 
             result = SwaigFunctionResult(
                 response=f"Got it, ${amount:,.0f}."
@@ -411,7 +533,7 @@ class LoanIntakeAgent(AgentBase):
             return self._save_intake_state(result, intake_state, global_data)
 
         except Exception as e:
-            print(f"❌ Error in collect_loan_amount: {str(e)}")
+            logger.error(f"❌ Error in collect_loan_amount: {str(e)}")
             return SwaigFunctionResult(response="Error collecting amount")
 
     @AgentBase.tool(
@@ -438,7 +560,7 @@ class LoanIntakeAgent(AgentBase):
             intake_state["funds_purpose"] = purpose
             intake_state["answered"].append("funds_purpose")
 
-            print(f"🎯 Collected purpose: {purpose}")
+            logger.info(f"🎯 Collected purpose: {purpose}")
 
             result = SwaigFunctionResult(
                 response=f"Understood, for {purpose}."
@@ -447,7 +569,7 @@ class LoanIntakeAgent(AgentBase):
             return self._save_intake_state(result, intake_state, global_data)
 
         except Exception as e:
-            print(f"❌ Error in collect_funds_purpose: {str(e)}")
+            logger.error(f"❌ Error in collect_funds_purpose: {str(e)}")
             return SwaigFunctionResult(response="Error collecting purpose")
 
     @AgentBase.tool(
@@ -474,7 +596,7 @@ class LoanIntakeAgent(AgentBase):
             intake_state["employment_status"] = employment_status
             intake_state["answered"].append("employment")
 
-            print(f"💼 Collected employment: {employment_status}")
+            logger.info(f"💼 Collected employment: {employment_status}")
 
             result = SwaigFunctionResult(
                 response="Thank you."
@@ -483,7 +605,7 @@ class LoanIntakeAgent(AgentBase):
             return self._save_intake_state(result, intake_state, global_data)
 
         except Exception as e:
-            print(f"❌ Error in collect_employment: {str(e)}")
+            logger.error(f"❌ Error in collect_employment: {str(e)}")
             return SwaigFunctionResult(response="Error collecting employment")
 
     @AgentBase.tool(
@@ -510,22 +632,21 @@ class LoanIntakeAgent(AgentBase):
             intake_state["credit_card_debt"] = float(amount)
             intake_state["answered"].append("credit_card_debt")
 
-            print(f"💳 Collected CC debt: ${amount:,.2f}")
+            logger.info(f"💳 Collected CC debt: ${amount:,.2f}")
 
             result = SwaigFunctionResult(
                 response=f"Okay, ${amount:,.0f} in credit card debt."
             )
 
-            # Save state to global_data
             return self._save_intake_state(result, intake_state, global_data)
 
         except Exception as e:
-            print(f"❌ Error in collect_credit_card_debt: {str(e)}")
+            logger.error(f"❌ Error in collect_credit_card_debt: {str(e)}")
             return SwaigFunctionResult(response="Error collecting debt")
 
     @AgentBase.tool(
         name="collect_personal_loan_debt",
-        description="collect personal loan debt of the caller in caller data.",
+        description="Collect personal loan debt of the caller in caller data.",
         parameters={
             "type": "object",
             "properties": {
@@ -542,22 +663,19 @@ class LoanIntakeAgent(AgentBase):
         try:
             amount = args.get("amount", 0)
 
-            # Get intake state from global_data
             intake_state, global_data = self._get_intake_state(raw_data)
 
-            # Store in global_data
             intake_state["personal_loan_debt"] = float(amount)
             intake_state["answered"].append("personal_loan_debt")
 
-            print(f"🏦 Collected personal loan debt: ${amount:,.2f}")
+            logger.info(f"🏦 Collected personal loan debt: ${amount:,.2f}")
 
             result = SwaigFunctionResult(response=f"Got it, ${amount:,.0f} in personal loans.")
 
-            # Save state to global_data
             return self._save_intake_state(result, intake_state, global_data)
 
         except Exception as e:
-            print(f"❌ Error in collect_personal_loan_debt: {str(e)}")
+            logger.error(f"❌ Error in collect_personal_loan_debt: {str(e)}")
             return SwaigFunctionResult(response="Error collecting debt")
 
     @AgentBase.tool(
@@ -579,31 +697,30 @@ class LoanIntakeAgent(AgentBase):
         try:
             amount = args.get("amount", 0)
 
-            # Get intake state from global_data
             intake_state, global_data = self._get_intake_state(raw_data)
 
-            # Store in global_data
             intake_state["other_debt"] = float(amount)
             intake_state["answered"].append("other_debt")
 
-            # Calculate total debt
-            total_debt = (
-                (intake_state.get("credit_card_debt") or 0) +
-                (intake_state.get("personal_loan_debt") or 0) +
-                (intake_state.get("other_debt") or 0)
-            )
+            # Calculate total debt and determine transfer tier
+            total_debt = self._calculate_total_debt(intake_state)
             intake_state["total_debt"] = total_debt
+            
+            # Determine transfer tier based on 3-tier routing
+            transfer_info = call_router.get_transfer_info(total_debt)
+            intake_state["transfer_tier"] = transfer_info["tier"].value
+            intake_state["transfer_did"] = transfer_info["did"]
 
-            print(f"🏥 Collected other debt: ${amount:,.2f}")
-            print(f"📊 Total unsecured debt: ${total_debt:,.2f}")
+            logger.info(f"🏥 Collected other debt: ${amount:,.2f}")
+            logger.info(f"📊 Total unsecured debt: ${total_debt:,.2f}")
+            logger.info(f"🎯 Transfer tier: {transfer_info['tier_name']} -> {transfer_info['did']}")
 
-            result = SwaigFunctionResult(response=f"Thank you.")
+            result = SwaigFunctionResult(response="Thank you.")
 
-            # Save state to global_data
             return self._save_intake_state(result, intake_state, global_data)
 
         except Exception as e:
-            print(f"❌ Error in collect_other_debt: {str(e)}")
+            logger.error(f"❌ Error in collect_other_debt: {str(e)}")
             return SwaigFunctionResult(response="Error collecting debt")
 
     @AgentBase.tool(
@@ -625,27 +742,24 @@ class LoanIntakeAgent(AgentBase):
         try:
             amount = args.get("amount")
 
-            # Get intake state from global_data
             intake_state, global_data = self._get_intake_state(raw_data)
 
-            # Store in global_data
             intake_state["monthly_income"] = float(amount)
             intake_state["answered"].append("monthly_income")
 
-            print(f"💵 Collected monthly income: ${amount:,.2f}")
+            logger.info(f"💵 Collected monthly income: ${amount:,.2f}")
 
-            result = SwaigFunctionResult(response=f"Thank you.")
+            result = SwaigFunctionResult(response="Thank you.")
 
-            # Save state to global_data
             return self._save_intake_state(result, intake_state, global_data)
 
         except Exception as e:
-            print(f"❌ Error in collect_monthly_income: {str(e)}")
+            logger.error(f"❌ Error in collect_monthly_income: {str(e)}")
             return SwaigFunctionResult(response="Error collecting income")
 
     @AgentBase.tool(
         name="collect_ssn_last_four",
-        description="collect the social security number (SSN) last four digits of the caller in caller data.",
+        description="Collect the social security number (SSN) last four digits of the caller in caller data.",
         parameters={
             "type": "object",
             "properties": {
@@ -662,35 +776,92 @@ class LoanIntakeAgent(AgentBase):
         try:
             digits = str(args.get("digits"))
 
-            # Get intake state from global_data
             intake_state, global_data = self._get_intake_state(raw_data)
 
-            # Store in global_data
             intake_state["ssn_last_four"] = digits
             intake_state["answered"].append("ssn_last_four")
 
-            print(f"🔒 Collected SSN last 4: ***{digits}")
+            logger.info(f"🔒 Collected SSN last 4: ***{digits}")
             self._print_collected_data(intake_state)
 
             result = SwaigFunctionResult(
-                response="""Collected social security number."""
+                response="Collected social security number."
             )
-            saved = self._save_intake_state(result, intake_state, global_data)
-            return saved
+            return self._save_intake_state(result, intake_state, global_data)
 
         except Exception as e:
-            print(f"❌ Error in collect_ssn_last_four: {str(e)}")
-            return SwaigFunctionResult(response="Error collecting SSN").hangup()
+            logger.error(f"❌ Error in collect_ssn_last_four: {str(e)}")
+            return SwaigFunctionResult(response="Error collecting SSN")
 
     @AgentBase.tool(
         name='transfer_call',
-        description='transfer the call.',
+        description='Initiate call transfer to the appropriate queue based on total debt tier.',
     )
     def transfer_call(self, args, raw_data):
-        result = SwaigFunctionResult(
-            "Thank you! I appreciate your patience. Now that I have all the necessary information, I will connect you with a senior underwriter who will go over your loan options in detail. Please hold for a moment while I transfer you."
-        )
-        return result.hangup()
+        """
+        Transfer the call to the appropriate queue based on total debt.
+        
+        Transfer Tiers:
+        - HIGH: Total debt >= $35,000
+        - MID: Total debt >= $10,000 and < $35,000
+        - LOW: Total debt < $10,000
+        """
+        try:
+            intake_state, global_data = self._get_intake_state(raw_data)
+            
+            # Get transfer info from intake state (calculated earlier) or recalculate
+            total_debt = intake_state.get("total_debt", 0)
+            transfer_tier = intake_state.get("transfer_tier", "low")
+            transfer_did = intake_state.get("transfer_did", "")
+            
+            if not transfer_did:
+                # Recalculate if not set
+                transfer_info = call_router.get_transfer_info(total_debt)
+                transfer_tier = transfer_info["tier"].value
+                transfer_did = transfer_info["did"]
+            
+            # Mark transfer as initiated
+            intake_state["transfer_initiated"] = True
+            intake_state["transfer_tier"] = transfer_tier
+            intake_state["transfer_did"] = transfer_did
+            
+            logger.info(f"📞 Initiating transfer for ${total_debt:,.2f} debt")
+            logger.info(f"   Tier: {transfer_tier.upper()}")
+            logger.info(f"   DID: {transfer_did}")
+            
+            # Print final summary
+            self._print_collected_data(intake_state)
+            
+            # Save call record to database (async in background)
+            call_id = intake_state.get("call_id")
+            if call_id:
+                asyncio.create_task(
+                    call_record_service.save_call_record(
+                        call_sid=call_id,
+                        intake_state=intake_state,
+                        client_id=intake_state.get("client_id"),
+                        agent_id=intake_state.get("agent_id")
+                    )
+                )
+            
+            # Save final state
+            result = SwaigFunctionResult(
+                response="Thank you! I appreciate your patience. Now that I have all the necessary information, "
+                         "I will connect you with a senior underwriter who will go over your loan options in detail. "
+                         "Please hold for a moment while I transfer you."
+            )
+            self._save_intake_state(result, intake_state, global_data)
+            
+            # For now, end the call gracefully (actual SIP transfer implementation pending)
+            # In production, this would initiate the actual transfer via SWML
+            return result.hangup()
+            
+        except Exception as e:
+            logger.error(f"❌ Error in transfer_call: {str(e)}")
+            return SwaigFunctionResult(
+                response="I apologize, but I'm having trouble completing the transfer. "
+                         "A representative will call you back shortly."
+            ).hangup()
     
     
     # ============================================
@@ -698,65 +869,54 @@ class LoanIntakeAgent(AgentBase):
     # ============================================
 
     def _print_collected_data(self, intake_state: dict):
-        """
-        Print all collected data to terminal for debugging/review.
-        """
-        print("\n" + "="*60)
-        print("📋 CALL INTAKE DATA SUMMARY")
-        print("="*60)
-        print(f"Call ID: {intake_state.get('call_id')}")
-        print(f"Phone Number: {intake_state.get('caller_number')}")
-        print(f"Lead Name: {intake_state.get('lead_name') or 'Not in CRM'}")
-        print("-"*60)
+        """Print all collected data to terminal for debugging/review."""
+        total_debt = intake_state.get('total_debt', 0)
+        transfer_tier = intake_state.get('transfer_tier', 'unknown')
+        
+        logger.info("\n" + "="*60)
+        logger.info("📋 CALL INTAKE DATA SUMMARY")
+        logger.info("="*60)
+        logger.info(f"Call ID: {intake_state.get('call_id')}")
+        logger.info(f"Phone Number: {intake_state.get('caller_number')}")
+        logger.info(f"Lead Name: {intake_state.get('lead_name') or 'Not provided'}")
+        logger.info("-"*60)
 
-        print("LOAN REQUEST:")
-        print(f"  Amount Requested: ${intake_state.get('loan_amount'):,.2f}" if intake_state.get('loan_amount') else "  Amount Requested: Not collected")
-        print(f"  Purpose: {intake_state.get('funds_purpose')}" if intake_state.get('funds_purpose') else "  Purpose: Not collected")
-        print(f"  Employment: {intake_state.get('employment_status')}" if intake_state.get('employment_status') else "  Employment: Not collected")
+        logger.info("LOAN REQUEST:")
+        if intake_state.get('loan_amount'):
+            logger.info(f"  Amount Requested: ${intake_state.get('loan_amount'):,.2f}")
+        else:
+            logger.info("  Amount Requested: Not collected")
+        logger.info(f"  Purpose: {intake_state.get('funds_purpose') or 'Not collected'}")
+        logger.info(f"  Employment: {intake_state.get('employment_status') or 'Not collected'}")
 
-        print("\nDEBT INFORMATION:")
-        print(f"  Credit Card Debt: ${intake_state.get('credit_card_debt'):,.2f}" if intake_state.get('credit_card_debt') is not None else "  Credit Card Debt: Not collected")
-        print(f"  Personal Loan Debt: ${intake_state.get('personal_loan_debt'):,.2f}" if intake_state.get('personal_loan_debt') is not None else "  Personal Loan Debt: Not collected")
-        print(f"  Other Debt: ${intake_state.get('other_debt'):,.2f}" if intake_state.get('other_debt') is not None else "  Other Debt: Not collected")
-        print(f"  TOTAL UNSECURED DEBT: ${intake_state.get('total_debt', 0):,.2f}")
+        logger.info("\nDEBT INFORMATION:")
+        logger.info(f"  Credit Card Debt: ${intake_state.get('credit_card_debt', 0):,.2f}")
+        logger.info(f"  Personal Loan Debt: ${intake_state.get('personal_loan_debt', 0):,.2f}")
+        logger.info(f"  Other Debt: ${intake_state.get('other_debt', 0):,.2f}")
+        logger.info(f"  TOTAL UNSECURED DEBT: ${total_debt:,.2f}")
 
-        print("\nINCOME:")
-        print(f"  Monthly Income: ${intake_state.get('monthly_income'):,.2f}" if intake_state.get('monthly_income') else "  Monthly Income: Not collected")
+        logger.info("\nTRANSFER ROUTING:")
+        logger.info(f"  Tier: {transfer_tier.upper()}")
+        logger.info(f"  DID: {intake_state.get('transfer_did') or 'Not set'}")
 
-        print("\nVERIFICATION:")
-        print(f"  SSN Last 4: ***{intake_state.get('ssn_last_four')}" if intake_state.get('ssn_last_four') else "  SSN Last 4: Not collected")
+        logger.info("\nINCOME:")
+        if intake_state.get('monthly_income'):
+            logger.info(f"  Monthly Income: ${intake_state.get('monthly_income'):,.2f}")
+        else:
+            logger.info("  Monthly Income: Not collected")
 
-        print("\nPROGRESS:")
-        print(f"  Questions Answered: {len(intake_state.get('answered', []))}/8")
-        print(f"  Current Step: {intake_state.get('current_step')}")
+        logger.info("\nVERIFICATION:")
+        if intake_state.get('ssn_last_four'):
+            logger.info(f"  SSN Last 4: ***{intake_state.get('ssn_last_four')}")
+        else:
+            logger.info("  SSN Last 4: Not collected")
 
-        print("="*60 + "\n")
+        logger.info("\nDNC STATUS:")
+        logger.info(f"  Is DNC: {intake_state.get('is_dnc', False)}")
+        if intake_state.get('dnc_phrase'):
+            logger.info(f"  DNC Phrase: {intake_state.get('dnc_phrase')}")
 
-    # ============================================
-    # TRANSFER LOGIC
-    # ============================================
+        logger.info("\nPROGRESS:")
+        logger.info(f"  Questions Answered: {len(intake_state.get('answered', []))}/9")
 
-    async def execute_transfer(self, queue_did: str, call_data: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Execute call transfer to 3CX queue.
-
-        LEARNING: This is called after all data is collected.
-        It transfers the call to the appropriate queue based on debt amount.
-        """
-        try:
-            # Get transfer parameters from call router
-            base_params = call_router.generate_transfer_params(queue_did)
-
-            transfer_config = {
-                **base_params,
-                "announce": "Please hold while I connect you with a senior underwriter.",
-                "bridge_type": "SIP",
-                "call_data": call_data
-            }
-
-            print(f"📞 Executing transfer to {queue_did}")
-            return transfer_config
-
-        except Exception as e:
-            print(f"❌ Error executing transfer: {str(e)}")
-            raise
+        logger.info("="*60 + "\n")

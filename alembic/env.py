@@ -13,7 +13,14 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # Import your app's database configuration
 from app.config import settings
 from app.database import Base
-from app.models import models  # Import all models
+
+# Import ALL models to ensure they're registered with Base.metadata
+from app.models.models import User
+from app.models.client import Client
+from app.models.agent import Agent
+from app.models.phone_number import PhoneNumber
+from app.models.call_records import CallRecord
+from app.models.dnc import DNCEntry
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.

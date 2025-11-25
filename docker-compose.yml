@@ -5,22 +5,37 @@ services:
     build: .
     ports:
       - "8000:8000"
-    environment:
-      - SIGNALWIRE_PROJECT_ID=${SIGNALWIRE_PROJECT_ID}
-      - SIGNALWIRE_API_TOKEN=${SIGNALWIRE_API_TOKEN}
-      - SIGNALWIRE_SPACE_URL=${SIGNALWIRE_SPACE_URL}
-      - OCC_CRM_API_URL=${OCC_CRM_API_URL}
-      - OCC_CRM_API_KEY=${OCC_CRM_API_KEY}
-      - QUEUE_A_DID=${QUEUE_A_DID}
-      - QUEUE_B_DID=${QUEUE_B_DID}
-      - TWILIO_SIP_TRUNK=${TWILIO_SIP_TRUNK}
-      - WEBHOOK_BASE_URL=${WEBHOOK_BASE_URL}
+    # This is the correct way to load all your passwords from the .env file
+    env_file:
+      - .env
+    # This tells the app to wait for the DB and Redis to start first
+    depends_on:
+      - db
+      - redis
+    restart: unless-stopped
     volumes:
       - ./app:/app/app
+
+  # This is the PostgreSQL database container being created for you
+  db:
+    image: postgres:15-alpine
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    environment:
+      # These variables use the secure passwords you set in your .env file
+      - POSTGRES_USER=${DB_USER}
+      - POSTGRES_PASSWORD=${DB_PASSWORD}
+      - POSTGRES_DB=${DB_NAME}
+    ports:
+      - "5432:5432"
     restart: unless-stopped
 
+  # This is the Redis speed-cache container
   redis:
     image: redis:7-alpine
     ports:
       - "6379:6379"
     restart: unless-stopped
+
+volumes:
+  postgres_data:
