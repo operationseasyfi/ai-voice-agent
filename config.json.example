@@ -1,6 +1,6 @@
 {
   "service": {
-    "name": "Loan Srevice",
+    "name": "Loan Service",
     "host": "${HOST|0.0.0.0}",
     "port": "${PORT|3405}"
   },
@@ -8,10 +8,10 @@
     "ssl_enabled": false,
     "auth": {
       "basic": {
-        "user": "dev",
-        "password": "devpass123"
+        "user": "your_username_here",
+        "password": "your_secure_password_here"
       }
     }
-    
   }
 }
+
