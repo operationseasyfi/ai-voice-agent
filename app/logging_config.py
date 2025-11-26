@@ -32,7 +32,6 @@ def configure_logging():
     else:
         # Production: JSON output for log aggregation
         processors = shared_processors + [
-            structlog.processors.dict_trampoline,
             structlog.processors.JSONRenderer()
         ]
     
