@@ -48,8 +48,55 @@ def cleanup_orphaned_types():
         print(f"⚠ Cleanup warning (continuing anyway): {e}")
         return True  # Continue even if cleanup fails
 
+def verify_tables_exist():
+    """Verify that critical tables exist after migrations."""
+    print("🔍 Verifying database tables exist...")
+    engine = create_engine(settings.DATABASE_URL.replace("+asyncpg", ""))
+    required_tables = ['users', 'clients', 'call_records']
+    missing_tables = []
+    
+    try:
+        with engine.connect() as conn:
+            for table in required_tables:
+                result = conn.execute(text(
+                    "SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = :table_name)"
+                ), {"table_name": table})
+                exists = result.scalar()
+                if exists:
+                    print(f"  ✅ Table '{table}' exists")
+                else:
+                    print(f"  ❌ Table '{table}' MISSING!")
+                    missing_tables.append(table)
+        
+        if missing_tables:
+            print(f"❌ Missing tables: {missing_tables}")
+            return False
+        print("✅ All required tables exist!")
+        return True
+    except Exception as e:
+        print(f"❌ Error verifying tables: {e}")
+        return False
+
+def check_migration_status():
+    """Check current Alembic migration status."""
+    print("📊 Checking migration status...")
+    try:
+        result = subprocess.run(
+            ["alembic", "current"],
+            capture_output=True,
+            text=True
+        )
+        print(f"Current migration status: {result.stdout}")
+        if result.stderr:
+            print(f"Status stderr: {result.stderr}")
+        return True
+    except Exception as e:
+        print(f"⚠ Could not check migration status: {e}")
+        return False
+
 def run_migrations():
     """Run Alembic migrations."""
+    check_migration_status()
     print("🔄 Running database migrations...")
     try:
         result = subprocess.run(
@@ -59,19 +106,32 @@ def run_migrations():
             text=True
         )
         print("✅ Migrations completed successfully!")
-        print(result.stdout)
+        if result.stdout:
+            print(result.stdout)
+        if result.stderr:
+            print(f"Migration stderr: {result.stderr}")
+        
+        # Verify tables were actually created
+        if not verify_tables_exist():
+            print("❌ Migrations completed but tables are missing!")
+            return False
+        
         return True
     except subprocess.CalledProcessError as e:
         # Check if it's a "already exists" error - might be recoverable
-        error_output = e.stderr.lower()
+        error_output = (e.stderr or "").lower()
         if "already exists" in error_output or "duplicate" in error_output:
             print("⚠ Migration failed due to existing objects.")
-            print("This might be recoverable. Attempting to continue...")
-            print(f"Error details: {e.stderr}")
-            # Try to continue anyway - tables might still be created
-            return True
+            print("Verifying tables exist anyway...")
+            if verify_tables_exist():
+                print("✅ Tables exist despite migration error. Continuing...")
+                return True
+            else:
+                print("❌ Tables are missing. Cannot continue.")
+                return False
         print(f"❌ Migration failed: {e}")
         print(f"Error output: {e.stderr}")
+        print(f"Stdout: {e.stdout}")
         return False
 
 def start_app():
