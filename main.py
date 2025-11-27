@@ -28,6 +28,9 @@ app.add_middleware(
         "http://localhost:3000",  # Next.js dev server
         "http://localhost:8000",
         "https://*.railway.app",  # Railway deployments
+        "https://*.onrender.com",  # Render deployments
+        "https://ai-voice-agent-frontend-l6bu.onrender.com",  # Frontend on Render
+        "https://ai-voice-agent-30yv.onrender.com",  # Backend on Render
     ],
     allow_credentials=True,
     allow_methods=["*"],
