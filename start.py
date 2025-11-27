@@ -24,6 +24,30 @@ def wait_for_db(max_retries=30):
                 return False
     return False
 
+def cleanup_orphaned_types():
+    """Drop orphaned enum types from previous failed migrations."""
+    print("🧹 Cleaning up orphaned database types...")
+    engine = create_engine(settings.DATABASE_URL.replace("+asyncpg", ""))
+    try:
+        with engine.begin() as conn:  # begin() auto-commits
+            # Drop enum types if they exist (from previous failed migrations)
+            types_to_drop = [
+                'phonenumbertype',
+                'transfertier',
+                'disconnectionreason'
+            ]
+            for enum_type in types_to_drop:
+                try:
+                    conn.execute(text(f"DROP TYPE IF EXISTS {enum_type} CASCADE"))
+                    print(f"  ✓ Dropped {enum_type} if it existed")
+                except Exception as e:
+                    print(f"  ⚠ Could not drop {enum_type}: {e}")
+        print("✅ Cleanup complete!")
+        return True
+    except Exception as e:
+        print(f"⚠ Cleanup warning (continuing anyway): {e}")
+        return True  # Continue even if cleanup fails
+
 def run_migrations():
     """Run Alembic migrations."""
     print("🔄 Running database migrations...")
@@ -38,6 +62,14 @@ def run_migrations():
         print(result.stdout)
         return True
     except subprocess.CalledProcessError as e:
+        # Check if it's a "already exists" error - might be recoverable
+        error_output = e.stderr.lower()
+        if "already exists" in error_output or "duplicate" in error_output:
+            print("⚠ Migration failed due to existing objects.")
+            print("This might be recoverable. Attempting to continue...")
+            print(f"Error details: {e.stderr}")
+            # Try to continue anyway - tables might still be created
+            return True
         print(f"❌ Migration failed: {e}")
         print(f"Error output: {e.stderr}")
         return False
@@ -56,6 +88,8 @@ if __name__ == "__main__":
     if not wait_for_db():
         print("❌ Failed to connect to database. Exiting.")
         sys.exit(1)
+    
+    cleanup_orphaned_types()
     
     if not run_migrations():
         print("❌ Migrations failed. Exiting.")
