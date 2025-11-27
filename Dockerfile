@@ -16,9 +16,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application code
 COPY . .
 
-# Make start script executable
-COPY start.sh .
-RUN chmod +x start.sh
+# Copy startup script
+COPY start.py .
 
 # Create non-root user for security
 RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app
@@ -32,4 +31,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:8000/health || exit 1
 
 # Run migrations and start app
-CMD ["./start.sh"]
+CMD ["python", "start.py"]
