@@ -1,5 +1,5 @@
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, func
 from fastapi import HTTPException, status
 from app.models.models import User
 from app.models.auth_schemas import UserCreate, UserUpdate
@@ -8,6 +8,12 @@ from typing import Optional
 
 class AuthService:
     """Service for user authentication and management."""
+    
+    @staticmethod
+    async def get_user_count(db: AsyncSession) -> int:
+        """Get total number of users in the database."""
+        result = await db.execute(select(func.count(User.id)))
+        return result.scalar() or 0
     
     @staticmethod
     async def authenticate_user(db: AsyncSession, username: str, password: str) -> Optional[User]:
@@ -56,14 +62,19 @@ class AuthService:
                 detail="Email already registered"
             )
         
-        # Create user
+        # Create user with hashed password
         hashed_password = get_password_hash(user_create.password)
+        
+        # Get roles if provided, otherwise default
+        roles = getattr(user_create, 'roles', None) or '["user"]'
+        
         db_user = User(
             email=user_create.email,
             username=user_create.username,
-            hashed_password=hashed_password,
-            full_name=user_create.full_name,
-            is_active=user_create.is_active,
+            password=hashed_password,  # The model uses 'password' field
+            full_name=getattr(user_create, 'full_name', None),
+            is_active=getattr(user_create, 'is_active', True),
+            roles=roles,
         )
         
         db.add(db_user)

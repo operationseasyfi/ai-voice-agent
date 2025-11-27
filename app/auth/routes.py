@@ -51,10 +51,24 @@ async def login(
 @router.post("/register", response_model=User)
 async def register(
     user_create: UserCreate,
-    db: AsyncSession = Depends(get_db),
-    current_user: User = Depends(get_current_superuser)  # Only superusers can create users for now
+    db: AsyncSession = Depends(get_db)
 ):
-    """Register a new user (superuser only)."""
+    """
+    Register a new user.
+    
+    If no users exist yet, the first user will be created as an admin.
+    Otherwise, this endpoint is open for self-registration.
+    """
+    # Check if this is the first user (make them admin)
+    user_count = await AuthService.get_user_count(db)
+    
+    if user_count == 0:
+        # First user becomes admin
+        user_create_dict = user_create.model_dump()
+        user_create_dict['roles'] = '["admin"]'
+        from app.models.auth_schemas import UserCreate as UC
+        user_create = UC(**user_create_dict)
+    
     return await AuthService.create_user(db, user_create)
 
 @router.get("/me", response_model=User)
