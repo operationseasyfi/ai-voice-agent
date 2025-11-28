@@ -107,7 +107,7 @@ def run_migrations():
         )
         print("✅ Migrations completed successfully!")
         if result.stdout:
-            print(result.stdout)
+            print(f"Migration stdout: {result.stdout}")
         if result.stderr:
             print(f"Migration stderr: {result.stderr}")
         
@@ -118,20 +118,20 @@ def run_migrations():
         
         return True
     except subprocess.CalledProcessError as e:
+        print(f"❌ Migration command failed with exit code: {e.returncode}")
+        print(f"📋 STDOUT: {e.stdout}")
+        print(f"📋 STDERR: {e.stderr}")
+        
         # Check if it's a "already exists" error - might be recoverable
-        error_output = (e.stderr or "").lower()
+        error_output = (e.stderr or "").lower() + (e.stdout or "").lower()
         if "already exists" in error_output or "duplicate" in error_output:
             print("⚠ Migration failed due to existing objects.")
             print("Verifying tables exist anyway...")
             if verify_tables_exist():
                 print("✅ Tables exist despite migration error. Continuing...")
                 return True
-            else:
-                print("❌ Tables are missing. Cannot continue.")
-                return False
-        print(f"❌ Migration failed: {e}")
-        print(f"Error output: {e.stderr}")
-        print(f"Stdout: {e.stdout}")
+        
+        print("❌ Tables are missing. Cannot continue.")
         return False
 
 def start_app():
