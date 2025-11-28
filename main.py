@@ -17,8 +17,7 @@ logger = get_logger(__name__)
 app = FastAPI(
     title="AI Voice Agent Platform",
     description="SignalWire AI Agent for loan intake with multi-tenant support",
-    version="2.0.0",
-    openapi_prefix="/api"
+    version="2.0.0"
 )
 
 # CORS middleware - configure appropriately for production
