@@ -5,6 +5,8 @@ from sqlalchemy import select, desc, and_, func
 from typing import Optional
 from uuid import UUID
 from datetime import date, datetime
+import csv
+import io
 
 from app.database import get_db
 from app.models.call_records import CallRecord, DisconnectionReason, TransferTier
@@ -226,3 +228,107 @@ async def get_call_recording(
         "recording_url": call.recording_url,
         "duration": call.recording_duration
     }
+
+
+@router.get("/export/csv")
+async def export_calls_csv(
+    from_date: Optional[date] = Query(None, description="Start date"),
+    to_date: Optional[date] = Query(None, description="End date"),
+    agent_id: Optional[UUID] = Query(None, description="Filter by agent"),
+    status: Optional[str] = Query(None, description="Filter by status"),
+    transfer_tier: Optional[str] = Query(None, description="Filter by transfer tier"),
+    is_dnc: Optional[bool] = Query(None, description="Filter DNC flagged calls"),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_active_user)
+):
+    """
+    Export call records as CSV file.
+    Single-click download for data analysis.
+    """
+    filters = []
+    
+    # Client filtering for non-admin users
+    if not current_user.is_admin() and current_user.client_id:
+        filters.append(CallRecord.client_id == current_user.client_id)
+    
+    # Date filters
+    if from_date:
+        start_datetime = datetime.combine(from_date, datetime.min.time())
+        filters.append(CallRecord.created_at >= start_datetime)
+    
+    if to_date:
+        end_datetime = datetime.combine(to_date, datetime.max.time())
+        filters.append(CallRecord.created_at <= end_datetime)
+    
+    # Optional filters
+    if agent_id:
+        filters.append(CallRecord.agent_id == agent_id)
+    
+    if status:
+        filters.append(CallRecord.status == status)
+    
+    if transfer_tier:
+        try:
+            tier_enum = TransferTier(transfer_tier)
+            filters.append(CallRecord.transfer_tier == tier_enum)
+        except ValueError:
+            pass
+    
+    if is_dnc is not None:
+        filters.append(CallRecord.is_dnc_flagged == is_dnc)
+    
+    # Get all matching calls (limit to 10000 to prevent OOM)
+    query = select(CallRecord).order_by(desc(CallRecord.created_at)).limit(10000)
+    if filters:
+        query = query.where(and_(*filters))
+    
+    result = await db.execute(query)
+    calls = result.scalars().all()
+    
+    # Create CSV in memory
+    output = io.StringIO()
+    writer = csv.writer(output)
+    
+    # Header row
+    writer.writerow([
+        "Call ID", "Date/Time", "From Number", "To Number", "Lead Name",
+        "Duration (sec)", "Status", "Disconnect Reason", "Transfer Tier",
+        "Transfer Success", "Total Debt", "Credit Card Debt", "Personal Loan Debt",
+        "Monthly Income", "Employment Status", "DNC Flagged", "DNC Phrase",
+        "Recording URL"
+    ])
+    
+    # Data rows
+    for call in calls:
+        writer.writerow([
+            call.call_sid or str(call.id),
+            call.call_started_at.isoformat() if call.call_started_at else (call.created_at.isoformat() if call.created_at else ""),
+            call.from_number or "",
+            call.to_number or "",
+            call.lead_name or "",
+            call.duration or 0,
+            call.status or "",
+            call.disconnection_reason.value if call.disconnection_reason else "",
+            call.transfer_tier.value if call.transfer_tier else "",
+            "Yes" if call.transfer_success else "No",
+            call.total_debt or 0,
+            call.credit_card_debt or 0,
+            call.personal_loan_debt or 0,
+            call.monthly_income or "",
+            call.employment_status or "",
+            "Yes" if call.is_dnc_flagged else "No",
+            call.dnc_phrase_detected or "",
+            call.recording_url or ""
+        ])
+    
+    output.seek(0)
+    
+    # Generate filename
+    date_suffix = f"{from_date or 'all'}_to_{to_date or 'all'}"
+    filename = f"call_records_{date_suffix}.csv"
+    
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": f"attachment; filename={filename}"}
+    )

@@ -1,33 +1,41 @@
 "use client"
 
 import { useState, useEffect } from "react"
+import { useSearchParams } from "next/navigation"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { AudioPlayer } from "@/components/ui/audio-player"
-import { Search, X, Phone, TrendingUp, Clock, AlertTriangle } from "lucide-react"
-import { getCalls, getAgents, getDashboardStats, type CallRecord, type Agent, type DashboardStats } from "@/lib/api"
+import { TranscriptViewer } from "@/components/ui/transcript-viewer"
+import { Search, X, Phone, TrendingUp, Clock, AlertTriangle, Download, FileText } from "lucide-react"
+import { getCalls, getAgents, getDashboardStats, getCallDetails, getTierColor, getTierLabel, getCallsExportUrl, type CallRecord, type Agent, type DashboardStats } from "@/lib/api"
 
 export default function CallHistoryPage() {
+  const searchParams = useSearchParams()
+  
   // State
   const [calls, setCalls] = useState<CallRecord[]>([])
   const [agents, setAgents] = useState<Agent[]>([])
   const [stats, setStats] = useState<DashboardStats | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [total, setTotal] = useState(0)
-  const [selectedCall, setSelectedCall] = useState<CallRecord | null>(null)
+  const [selectedCall, setSelectedCall] = useState<any>(null)
+  const [callTranscript, setCallTranscript] = useState<string | null>(null)
+  const [loadingDetails, setLoadingDetails] = useState(false)
   
   // Pagination
   const [page, setPage] = useState(0)
   const limit = 25
 
-  // Filters
+  // Filters - initialize from URL params if present
   const [searchQuery, setSearchQuery] = useState("")
-  const [statusFilter, setStatusFilter] = useState("all")
-  const [agentFilter, setAgentFilter] = useState("")
-  const [tierFilter, setTierFilter] = useState("all")
-  const [fromDate, setFromDate] = useState<string>("")
-  const [toDate, setToDate] = useState<string>("")
+  const [statusFilter, setStatusFilter] = useState(searchParams.get('status') || "all")
+  const [agentFilter, setAgentFilter] = useState(searchParams.get('agent_id') || "")
+  const [tierFilter, setTierFilter] = useState(searchParams.get('transfer_tier') || "all")
+  const [dncFilter, setDncFilter] = useState(searchParams.get('is_dnc') === 'true')
+  const [reasonFilter, setReasonFilter] = useState(searchParams.get('disconnection_reason') || "all")
+  const [fromDate, setFromDate] = useState<string>(searchParams.get('from_date') || "")
+  const [toDate, setToDate] = useState<string>(searchParams.get('to_date') || "")
 
   // Fetch data
   useEffect(() => {
@@ -45,6 +53,8 @@ export default function CallHistoryPage() {
         if (agentFilter) params.agent_id = agentFilter
         if (statusFilter !== "all") params.status = statusFilter
         if (tierFilter !== "all") params.transfer_tier = tierFilter
+        if (dncFilter) params.is_dnc = true
+        if (reasonFilter !== "all") params.disconnection_reason = reasonFilter
         
         const [callsData, agentsData, statsData] = await Promise.all([
           getCalls(params),
@@ -68,7 +78,24 @@ export default function CallHistoryPage() {
     }
     
     fetchData()
-  }, [page, fromDate, toDate, agentFilter, statusFilter, tierFilter])
+  }, [page, fromDate, toDate, agentFilter, statusFilter, tierFilter, dncFilter, reasonFilter])
+
+  // Fetch call details with transcript when a call is selected
+  const handleSelectCall = async (call: CallRecord) => {
+    setSelectedCall(call)
+    setLoadingDetails(true)
+    setCallTranscript(null)
+    
+    try {
+      const details = await getCallDetails(call.id)
+      setSelectedCall(details)
+      setCallTranscript(details.transcript || null)
+    } catch (err) {
+      console.error("Error fetching call details:", err)
+    } finally {
+      setLoadingDetails(false)
+    }
+  }
 
   // Client-side search filter
   const filteredCalls = calls.filter(call => {
@@ -86,12 +113,14 @@ export default function CallHistoryPage() {
     setStatusFilter("all")
     setAgentFilter("")
     setTierFilter("all")
+    setDncFilter(false)
+    setReasonFilter("all")
     setFromDate("")
     setToDate("")
     setPage(0)
   }
 
-  const hasActiveFilters = searchQuery || statusFilter !== "all" || agentFilter || tierFilter !== "all" || fromDate || toDate
+  const hasActiveFilters = searchQuery || statusFilter !== "all" || agentFilter || tierFilter !== "all" || dncFilter || reasonFilter !== "all" || fromDate || toDate
 
   return (
     <div className="space-y-8">
@@ -103,7 +132,22 @@ export default function CallHistoryPage() {
             Complete record of all calls with recordings and transcripts
           </p>
         </div>
-        <Button variant="outline">Export Records</Button>
+        <a 
+          href={getCallsExportUrl({
+            from_date: fromDate || undefined,
+            to_date: toDate || undefined,
+            agent_id: agentFilter || undefined,
+            status: statusFilter !== "all" ? statusFilter : undefined,
+            transfer_tier: tierFilter !== "all" ? tierFilter : undefined,
+            is_dnc: dncFilter || undefined
+          })}
+          download
+        >
+          <Button variant="outline">
+            <Download className="h-4 w-4 mr-2" />
+            Export CSV
+          </Button>
+        </a>
       </div>
 
       {/* Filters */}
@@ -260,15 +304,15 @@ export default function CallHistoryPage() {
                   <div
                     key={call.id}
                     className="flex items-center justify-between p-4 border rounded-lg hover:bg-muted/50 cursor-pointer transition-colors"
-                    onClick={() => setSelectedCall(call)}
+                    onClick={() => handleSelectCall(call)}
                   >
                     <div className="space-y-1 min-w-[200px]">
                       <div className="flex items-center gap-2">
                         <p className="font-medium">{call.lead_name || "Unknown"}</p>
                         {call.transfer_tier && call.transfer_tier !== "none" && (
-                          <Badge variant="outline" size="sm">
-                            {call.transfer_tier.toUpperCase()}
-                          </Badge>
+                          <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium border ${getTierColor(call.transfer_tier)}`}>
+                            {getTierLabel(call.transfer_tier)}
+                          </span>
                         )}
                         {call.is_dnc_flagged && (
                           <Badge variant="destructive" size="sm">DNC</Badge>
@@ -279,6 +323,7 @@ export default function CallHistoryPage() {
                         {call.disconnection_reason === "transferred" ? "Transferred successfully" :
                          call.disconnection_reason === "caller_hangup" ? "Caller hung up" :
                          call.disconnection_reason === "dnc_detected" ? "DNC detected" :
+                         call.disconnection_reason === "no_answer" ? "No answer" :
                          call.disconnection_reason || "Unknown"}
                         {call.total_debt > 0 && ` • $${call.total_debt.toLocaleString()} total debt`}
                       </p>
@@ -345,12 +390,15 @@ export default function CallHistoryPage() {
           <CardHeader>
             <div className="flex items-center justify-between">
               <div>
-                <CardTitle>Call Details</CardTitle>
+                <CardTitle className="flex items-center gap-2">
+                  Call Details
+                  {loadingDetails && <span className="text-sm font-normal text-muted-foreground">(Loading...)</span>}
+                </CardTitle>
                 <CardDescription>
                   {selectedCall.lead_name || "Unknown"} • {selectedCall.from_number}
                 </CardDescription>
               </div>
-              <Button variant="outline" onClick={() => setSelectedCall(null)}>Close</Button>
+              <Button variant="outline" onClick={() => { setSelectedCall(null); setCallTranscript(null); }}>Close</Button>
             </div>
           </CardHeader>
           <CardContent>
@@ -402,13 +450,17 @@ export default function CallHistoryPage() {
                   </div>
                   <div className="flex justify-between">
                     <span className="text-muted-foreground">Transfer Tier:</span>
-                    <Badge variant="outline">
-                      {selectedCall.transfer_tier?.toUpperCase() || "N/A"}
-                    </Badge>
+                    {selectedCall.transfer_tier && selectedCall.transfer_tier !== "none" ? (
+                      <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium border ${getTierColor(selectedCall.transfer_tier)}`}>
+                        {getTierLabel(selectedCall.transfer_tier)}
+                      </span>
+                    ) : (
+                      <span>N/A</span>
+                    )}
                   </div>
                   <div className="flex justify-between">
                     <span className="text-muted-foreground">DNC Flagged:</span>
-                    <span>{selectedCall.is_dnc_flagged ? "Yes" : "No"}</span>
+                    <span>{selectedCall.is_dnc_flagged ? <Badge variant="destructive" size="sm">Yes</Badge> : "No"}</span>
                   </div>
                 </div>
               </div>
@@ -421,6 +473,18 @@ export default function CallHistoryPage() {
                 <AudioPlayer audioSrc={selectedCall.recording_url} />
               </div>
             )}
+
+            {/* Transcript with Keyword Highlighting */}
+            <div className="mt-6 space-y-2">
+              <div className="flex items-center gap-2">
+                <FileText className="h-4 w-4" />
+                <h4 className="text-sm font-medium">Transcript</h4>
+              </div>
+              <TranscriptViewer 
+                transcript={callTranscript || selectedCall.transcript}
+                showLegend={true}
+              />
+            </div>
           </CardContent>
         </Card>
       )}

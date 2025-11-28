@@ -639,3 +639,29 @@ export function getTierLabel(tier: string): string {
   }
 }
 
+/**
+ * Get CSV export URL for calls
+ */
+export function getCallsExportUrl(params?: {
+  from_date?: string;
+  to_date?: string;
+  agent_id?: string;
+  status?: string;
+  transfer_tier?: string;
+  is_dnc?: boolean;
+}): string {
+  const searchParams = new URLSearchParams();
+  if (params?.from_date) searchParams.set('from_date', params.from_date);
+  if (params?.to_date) searchParams.set('to_date', params.to_date);
+  if (params?.agent_id) searchParams.set('agent_id', params.agent_id);
+  if (params?.status) searchParams.set('status', params.status);
+  if (params?.transfer_tier) searchParams.set('transfer_tier', params.transfer_tier);
+  if (params?.is_dnc !== undefined) searchParams.set('is_dnc', String(params.is_dnc));
+  
+  const token = getAuthToken();
+  if (token) searchParams.set('token', token);
+  
+  const query = searchParams.toString();
+  return `${API_BASE_URL}/api/calls/export/csv${query ? `?${query}` : ''}`;
+}
+
