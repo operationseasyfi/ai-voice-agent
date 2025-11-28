@@ -1,6 +1,7 @@
 from pydantic import BaseModel, EmailStr
-from typing import Optional
+from typing import Optional, List
 from datetime import datetime
+from uuid import UUID
 
 # User schemas
 class UserBase(BaseModel):
@@ -11,6 +12,8 @@ class UserBase(BaseModel):
 
 class UserCreate(UserBase):
     password: str
+    roles: Optional[List[str]] = None
+    client_id: Optional[UUID] = None
 
 class UserUpdate(BaseModel):
     email: Optional[EmailStr] = None
@@ -18,20 +21,13 @@ class UserUpdate(BaseModel):
     full_name: Optional[str] = None
     is_active: Optional[bool] = None
     password: Optional[str] = None
-
-class UserInDB(UserBase):
-    id: int
-    hashed_password: str
-    is_superuser: bool
-    created_at: datetime
-    updated_at: datetime
-    
-    class Config:
-        from_attributes = True
+    roles: Optional[List[str]] = None
+    client_id: Optional[UUID] = None
 
 class User(UserBase):
-    id: int
-    is_superuser: bool
+    id: UUID
+    roles: Optional[str] = None  # JSON string in DB
+    client_id: Optional[UUID] = None
     created_at: datetime
     updated_at: datetime
     

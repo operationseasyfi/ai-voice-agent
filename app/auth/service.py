@@ -5,6 +5,7 @@ from app.models.models import User
 from app.models.auth_schemas import UserCreate, UserUpdate
 from app.auth.utils import verify_password, get_password_hash
 from typing import Optional
+import json
 
 class AuthService:
     """Service for user authentication and management."""
@@ -65,16 +66,19 @@ class AuthService:
         # Create user with hashed password
         hashed_password = get_password_hash(user_create.password)
         
-        # Get roles if provided, otherwise default
-        roles = getattr(user_create, 'roles', None) or '["user"]'
+        # Get roles if provided, otherwise default to ["user"]
+        # Convert list to JSON string for storage
+        roles_list = user_create.roles if user_create.roles else ["user"]
+        roles_json = json.dumps(roles_list)
         
         db_user = User(
             email=user_create.email,
             username=user_create.username,
             password=hashed_password,  # The model uses 'password' field
-            full_name=getattr(user_create, 'full_name', None),
-            is_active=getattr(user_create, 'is_active', True),
-            roles=roles,
+            full_name=user_create.full_name,
+            is_active=user_create.is_active if user_create.is_active is not None else True,
+            roles=roles_json,
+            client_id=user_create.client_id,
         )
         
         db.add(db_user)
