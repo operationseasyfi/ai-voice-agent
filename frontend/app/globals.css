@@ -7,7 +7,7 @@
   --card-foreground: 222.2 84% 4.9%;
   --popover: 0 0% 100%;
   --popover-foreground: 222.2 84% 4.9%;
-  --primary: 239 84% 67%;
+  --primary: 250 84% 67%;
   --primary-foreground: 210 40% 98%;
   --secondary: 210 40% 96.1%;
   --secondary-foreground: 222.2 47.4% 11.2%;
@@ -23,34 +23,34 @@
   --destructive-foreground: 210 40% 98%;
   --border: 214.3 31.8% 91.4%;
   --input: 214.3 31.8% 91.4%;
-  --ring: 239 84% 67%;
-  --radius: 0.5rem;
+  --ring: 250 84% 67%;
+  --radius: 0.75rem;
 }
 
 .dark {
-  --background: 0 0% 0%;
+  --background: 240 10% 4%;
   --foreground: 0 0% 98%;
-  --card: 0 0% 5%;
+  --card: 240 10% 6%;
   --card-foreground: 0 0% 98%;
-  --popover: 0 0% 5%;
+  --popover: 240 10% 6%;
   --popover-foreground: 0 0% 98%;
-  --primary: 239 84% 67%;
+  --primary: 250 84% 67%;
   --primary-foreground: 0 0% 98%;
-  --secondary: 0 0% 10%;
+  --secondary: 240 10% 10%;
   --secondary-foreground: 0 0% 98%;
-  --muted: 0 0% 10%;
-  --muted-foreground: 0 0% 65%;
-  --accent: 0 0% 10%;
+  --muted: 240 10% 12%;
+  --muted-foreground: 240 5% 55%;
+  --accent: 240 10% 12%;
   --accent-foreground: 0 0% 98%;
-  --success: 142 76% 36%;
+  --success: 142 76% 42%;
   --success-foreground: 0 0% 98%;
-  --warning: 38 92% 50%;
+  --warning: 38 92% 55%;
   --warning-foreground: 0 0% 5%;
-  --destructive: 0 62.8% 30.6%;
+  --destructive: 0 62.8% 50%;
   --destructive-foreground: 0 0% 98%;
-  --border: 0 0% 20%;
-  --input: 0 0% 20%;
-  --ring: 239 84% 67%;
+  --border: 240 10% 15%;
+  --input: 240 10% 15%;
+  --ring: 250 84% 67%;
 }
 
 @theme inline {
@@ -86,6 +86,149 @@
 }
 
 body {
-  @apply bg-background text-foreground;
+  @apply bg-background text-foreground antialiased;
   font-feature-settings: "rlig" 1, "calt" 1;
+}
+
+/* Custom scrollbar for dark mode */
+.dark::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.dark::-webkit-scrollbar-track {
+  background: hsl(240 10% 6%);
+}
+
+.dark::-webkit-scrollbar-thumb {
+  background: hsl(240 10% 20%);
+  border-radius: 4px;
+}
+
+.dark::-webkit-scrollbar-thumb:hover {
+  background: hsl(240 10% 30%);
+}
+
+/* Gradient text utility */
+.gradient-text {
+  @apply bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500 bg-clip-text text-transparent;
+}
+
+/* Glow effects */
+.glow-purple {
+  box-shadow: 0 0 20px rgba(139, 92, 246, 0.15);
+}
+
+.glow-emerald {
+  box-shadow: 0 0 20px rgba(16, 185, 129, 0.15);
+}
+
+/* Card hover effects */
+.card-hover {
+  @apply transition-all duration-300;
+}
+
+.card-hover:hover {
+  @apply shadow-xl border-purple-500/20;
+  transform: translateY(-2px);
+}
+
+/* Loading skeleton animation */
+@keyframes shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+.skeleton {
+  background: linear-gradient(
+    90deg,
+    hsl(var(--muted)) 25%,
+    hsl(var(--muted) / 0.5) 50%,
+    hsl(var(--muted)) 75%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
+}
+
+/* Smooth page transitions */
+.page-transition {
+  animation: fadeIn 0.3s ease-out;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Focus styles */
+input:focus,
+select:focus,
+textarea:focus,
+button:focus {
+  @apply outline-none ring-2 ring-purple-500/20;
+}
+
+/* Button gradient hover */
+.btn-gradient {
+  @apply bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500;
+  background-size: 200% auto;
+  transition: background-position 0.3s ease;
+}
+
+.btn-gradient:hover {
+  background-position: right center;
+}
+
+/* Status indicator pulse */
+.status-pulse {
+  animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
+/* Table styles */
+table {
+  @apply w-full;
+}
+
+th {
+  @apply text-left text-xs font-medium text-muted-foreground uppercase tracking-wider;
+}
+
+td {
+  @apply py-3 text-sm;
+}
+
+/* Badge variants */
+.badge-success {
+  @apply bg-emerald-500/10 text-emerald-500 border-emerald-500/20;
+}
+
+.badge-warning {
+  @apply bg-amber-500/10 text-amber-500 border-amber-500/20;
+}
+
+.badge-destructive {
+  @apply bg-red-500/10 text-red-500 border-red-500/20;
+}
+
+.badge-info {
+  @apply bg-blue-500/10 text-blue-500 border-blue-500/20;
 }
