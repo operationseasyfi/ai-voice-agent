@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, Suspense } from "react"
 import { useSearchParams } from "next/navigation"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
@@ -10,7 +10,8 @@ import { TranscriptViewer } from "@/components/ui/transcript-viewer"
 import { Search, X, Phone, TrendingUp, Clock, AlertTriangle, Download, FileText } from "lucide-react"
 import { getCalls, getAgents, getDashboardStats, getCallDetails, getTierColor, getTierLabel, getCallsExportUrl, type CallRecord, type Agent, type DashboardStats, type CallDetails } from "@/lib/api"
 
-export default function CallHistoryPage() {
+// Wrapper component to handle Suspense for useSearchParams
+function CallHistoryContent() {
   const searchParams = useSearchParams()
   
   // State
@@ -489,5 +490,18 @@ export default function CallHistoryPage() {
         </Card>
       )}
     </div>
+  )
+}
+
+// Main export with Suspense boundary for useSearchParams
+export default function CallHistoryPage() {
+  return (
+    <Suspense fallback={
+      <div className="flex items-center justify-center py-12">
+        <p className="text-muted-foreground">Loading call history...</p>
+      </div>
+    }>
+      <CallHistoryContent />
+    </Suspense>
   )
 }
