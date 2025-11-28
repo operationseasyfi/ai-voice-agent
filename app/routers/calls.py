@@ -10,6 +10,9 @@ from app.database import get_db
 from app.models.call_records import CallRecord, DisconnectionReason, TransferTier
 from app.auth.dependencies import get_current_active_user
 from app.models.models import User
+from app.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 router = APIRouter()
 
@@ -81,20 +84,35 @@ async def get_call_history(
     count_result = await db.execute(count_query)
     total = count_result.scalar() or 0
     
-    # Get calls
-    query = select(CallRecord).order_by(desc(CallRecord.created_at)).offset(skip).limit(limit)
-    if filters:
-        query = query.where(and_(*filters))
-    
-    result = await db.execute(query)
-    calls = result.scalars().all()
-    
-    return {
-        "total": total,
-        "skip": skip,
-        "limit": limit,
-        "calls": [call.to_dashboard_dict() for call in calls]
-    }
+    # Get calls - handle missing columns gracefully
+    try:
+        query = select(CallRecord).order_by(desc(CallRecord.created_at)).offset(skip).limit(limit)
+        if filters:
+            query = query.where(and_(*filters))
+        
+        result = await db.execute(query)
+        calls = result.scalars().all()
+        
+        return {
+            "total": total,
+            "skip": skip,
+            "limit": limit,
+            "calls": [call.to_dashboard_dict() for call in calls]
+        }
+    except Exception as e:
+        error_msg = str(e)
+        if "does not exist" in error_msg.lower() or "undefinedcolumn" in error_msg.lower():
+            logger.error(f"Database columns missing - migrations need to run: {error_msg}")
+            # Return empty result with warning instead of crashing
+            return {
+                "total": 0,
+                "skip": skip,
+                "limit": limit,
+                "calls": [],
+                "error": "Database migration required. Please contact support."
+            }
+        # Re-raise other exceptions
+        raise
 
 
 @router.get("/live/concurrent")
