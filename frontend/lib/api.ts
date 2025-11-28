@@ -3,13 +3,30 @@
  * Handles authentication and all API calls
  */
 
-// API Base URL configuration
-// In production (Render), use the deployed backend URL
-// In development, use localhost
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL 
-  || (process.env.NODE_ENV === 'production' 
-    ? 'https://ai-voice-agent-30yv.onrender.com'
-    : 'http://localhost:8000');
+// API Base URL configuration - hardcoded for production reliability
+const getApiBaseUrl = (): string => {
+  // Check for env var first (allows local override)
+  if (process.env.NEXT_PUBLIC_API_URL) {
+    return process.env.NEXT_PUBLIC_API_URL;
+  }
+  
+  // In browser, check if we're on Render
+  if (typeof window !== 'undefined') {
+    const hostname = window.location.hostname;
+    if (hostname.includes('onrender.com') || hostname.includes('render.com')) {
+      return 'https://ai-voice-agent-30yv.onrender.com';
+    }
+    // Any non-localhost production environment
+    if (!hostname.includes('localhost') && !hostname.includes('127.0.0.1')) {
+      return 'https://ai-voice-agent-30yv.onrender.com';
+    }
+  }
+  
+  // Default for local development
+  return 'http://localhost:8000';
+};
+
+const API_BASE_URL = getApiBaseUrl();
 
 // Token storage
 let authToken: string | null = null;
