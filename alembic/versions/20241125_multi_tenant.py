@@ -19,10 +19,8 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    # Create enum types
-    op.execute("CREATE TYPE disconnectionreason AS ENUM ('transferred', 'caller_hangup', 'agent_hangup', 'dnc_detected', 'error', 'timeout', 'no_answer', 'unknown')")
-    op.execute("CREATE TYPE transfertier AS ENUM ('high', 'mid', 'low', 'none')")
-    op.execute("CREATE TYPE phonenumbertype AS ENUM ('ai_inbound', 'transfer_high', 'transfer_mid', 'transfer_low', 'outbound')")
+    # NOTE: Enum types are created automatically by SQLAlchemy when used in sa.Enum() columns
+    # Do NOT manually create them here as it causes "already exists" errors
     
     # Create clients table
     op.create_table('clients',
@@ -185,8 +183,5 @@ def downgrade() -> None:
     op.drop_index(op.f('ix_clients_slug'), table_name='clients')
     op.drop_table('clients')
     
-    # Drop enum types
-    op.execute("DROP TYPE IF EXISTS phonenumbertype")
-    op.execute("DROP TYPE IF EXISTS transfertier")
-    op.execute("DROP TYPE IF EXISTS disconnectionreason")
+    # NOTE: Enum types are dropped automatically by SQLAlchemy when tables using them are dropped
 
