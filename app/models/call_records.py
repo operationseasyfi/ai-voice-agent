@@ -67,6 +67,14 @@ class CallRecord(BaseModel):
     transfer_success = Column(Boolean, default=False)
     transfer_duration = Column(Float, default=0.0)  # Time spent on transfer
     
+    # Lost transfers tracking
+    transfer_attempt_time = Column(DateTime(timezone=True), nullable=True)  # When transfer was attempted
+    transfer_wait_duration = Column(Float, default=0.0)  # How long caller waited
+    transfer_answered = Column(Boolean, default=False)  # Whether closer answered
+    
+    # Disqualification tracking
+    disqualification_reason = Column(String(255), nullable=True)  # Why caller was ineligible
+    
     # DNC flagging
     is_dnc_flagged = Column(Boolean, default=False)
     dnc_phrase_detected = Column(Text, nullable=True)
@@ -151,12 +159,25 @@ class CallRecord(BaseModel):
             "disconnection_reason": self.disconnection_reason.value if self.disconnection_reason else "unknown",
             "transfer_tier": self.transfer_tier.value if self.transfer_tier else "none",
             "transfer_success": self.transfer_success,
+            "transfer_answered": self.transfer_answered,
+            "transfer_wait_duration": self.transfer_wait_duration,
             "is_dnc_flagged": self.is_dnc_flagged,
             "total_debt": self.total_debt,
             "recording_url": self.recording_url,
+            "disqualification_reason": self.disqualification_reason,
             "call_started_at": self.call_started_at.isoformat() if self.call_started_at else None,
             "created_at": self.created_at.isoformat() if self.created_at else None
         }
+    
+    @property
+    def is_lost_transfer(self) -> bool:
+        """Check if this call was a lost transfer (qualified but not answered)"""
+        return (
+            self.transfer_tier in [TransferTier.HIGH, TransferTier.MID, TransferTier.LOW] and
+            self.transfer_tier != TransferTier.NONE and
+            not self.transfer_answered and
+            self.disconnection_reason in [DisconnectionReason.NO_ANSWER, DisconnectionReason.TIMEOUT, DisconnectionReason.CALLER_HANGUP]
+        )
     
     @staticmethod
     def _format_duration(seconds: float) -> str:

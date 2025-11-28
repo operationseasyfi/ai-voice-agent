@@ -286,6 +286,270 @@ async def get_successful_transfers(
     }
 
 
+@router.get("/lost-transfers")
+async def get_lost_transfers(
+    from_date: Optional[date] = Query(None, description="Start date (defaults to today)"),
+    to_date: Optional[date] = Query(None, description="End date (defaults to today)"),
+    tier: Optional[str] = Query(None, description="Filter by tier (high, mid, low)"),
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_active_user)
+):
+    """
+    Get lost transfers - calls that qualified for transfer but no closer answered.
+    These represent missed revenue opportunities.
+    """
+    if not from_date:
+        from_date = date.today()
+    if not to_date:
+        to_date = date.today()
+    
+    start_datetime = datetime.combine(from_date, datetime.min.time())
+    end_datetime = datetime.combine(to_date, datetime.max.time())
+    
+    # Lost transfers: had a transfer tier but transfer was not successful
+    filters = [
+        CallRecord.created_at >= start_datetime,
+        CallRecord.created_at <= end_datetime,
+        CallRecord.transfer_tier.in_([TransferTier.HIGH, TransferTier.MID, TransferTier.LOW]),
+        CallRecord.transfer_success == False,
+        or_(
+            CallRecord.disconnection_reason == DisconnectionReason.NO_ANSWER,
+            CallRecord.disconnection_reason == DisconnectionReason.TIMEOUT,
+            CallRecord.disconnection_reason == DisconnectionReason.CALLER_HANGUP
+        )
+    ]
+    
+    if not current_user.is_admin() and current_user.client_id:
+        filters.append(CallRecord.client_id == current_user.client_id)
+    
+    if tier:
+        try:
+            tier_enum = TransferTier(tier)
+            filters.append(CallRecord.transfer_tier == tier_enum)
+        except ValueError:
+            pass
+    
+    # Count total
+    count_result = await db.execute(
+        select(func.count(CallRecord.id)).where(and_(*filters))
+    )
+    total = count_result.scalar() or 0
+    
+    # Summary by tier
+    tier_summary = {"high": 0, "mid": 0, "low": 0}
+    try:
+        tier_result = await db.execute(
+            select(
+                CallRecord.transfer_tier,
+                func.count(CallRecord.id)
+            ).where(and_(*filters))
+            .group_by(CallRecord.transfer_tier)
+        )
+        for row in tier_result:
+            if row[0] and row[0].value in tier_summary:
+                tier_summary[row[0].value] = row[1]
+    except Exception as e:
+        logger.warning(f"Error getting tier summary: {e}")
+    
+    # Get the calls
+    result = await db.execute(
+        select(CallRecord)
+        .where(and_(*filters))
+        .order_by(CallRecord.created_at.desc())
+        .offset(skip)
+        .limit(limit)
+    )
+    lost_calls = result.scalars().all()
+    
+    # Calculate estimated lost revenue (rough estimate: $500 per High, $300 per Mid, $100 per Low)
+    estimated_lost_revenue = (
+        tier_summary["high"] * 500 +
+        tier_summary["mid"] * 300 +
+        tier_summary["low"] * 100
+    )
+    
+    return {
+        "period": {
+            "from_date": from_date.isoformat(),
+            "to_date": to_date.isoformat()
+        },
+        "total_lost": total,
+        "by_tier": tier_summary,
+        "estimated_lost_revenue": estimated_lost_revenue,
+        "skip": skip,
+        "limit": limit,
+        "calls": [c.to_dashboard_dict() for c in lost_calls]
+    }
+
+
+@router.get("/pickup-rates")
+async def get_pickup_rates_by_did(
+    from_date: Optional[date] = Query(None, description="Start date (defaults to today)"),
+    to_date: Optional[date] = Query(None, description="End date (defaults to today)"),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_active_user)
+):
+    """
+    Get pickup rates by destination DID.
+    Shows which queues/DIDs have the best and worst answer rates.
+    """
+    if not from_date:
+        from_date = date.today()
+    if not to_date:
+        to_date = date.today()
+    
+    start_datetime = datetime.combine(from_date, datetime.min.time())
+    end_datetime = datetime.combine(to_date, datetime.max.time())
+    
+    # Filter for calls that attempted transfer
+    filters = [
+        CallRecord.created_at >= start_datetime,
+        CallRecord.created_at <= end_datetime,
+        CallRecord.transfer_did.isnot(None),
+        CallRecord.transfer_tier.in_([TransferTier.HIGH, TransferTier.MID, TransferTier.LOW])
+    ]
+    
+    if not current_user.is_admin() and current_user.client_id:
+        filters.append(CallRecord.client_id == current_user.client_id)
+    
+    # Group by DID and calculate pickup rates
+    result = await db.execute(
+        select(
+            CallRecord.transfer_did,
+            CallRecord.transfer_tier,
+            func.count(CallRecord.id).label('total_attempts'),
+            func.count(CallRecord.id).filter(CallRecord.transfer_success == True).label('successful'),
+            func.avg(CallRecord.transfer_wait_duration).label('avg_wait')
+        ).where(and_(*filters))
+        .group_by(CallRecord.transfer_did, CallRecord.transfer_tier)
+        .order_by(func.count(CallRecord.id).desc())
+    )
+    
+    did_stats = []
+    for row in result:
+        total_attempts = row.total_attempts or 0
+        successful = row.successful or 0
+        pickup_rate = round((successful / total_attempts * 100), 1) if total_attempts > 0 else 0
+        
+        did_stats.append({
+            "did": row.transfer_did,
+            "tier": row.transfer_tier.value if row.transfer_tier else "unknown",
+            "total_attempts": total_attempts,
+            "successful": successful,
+            "lost": total_attempts - successful,
+            "pickup_rate": pickup_rate,
+            "avg_wait_seconds": round(row.avg_wait or 0, 1)
+        })
+    
+    # Sort by pickup rate (worst first for identifying problems)
+    did_stats_sorted = sorted(did_stats, key=lambda x: x['pickup_rate'])
+    
+    return {
+        "period": {
+            "from_date": from_date.isoformat(),
+            "to_date": to_date.isoformat()
+        },
+        "did_performance": did_stats_sorted,
+        "best_performing": did_stats_sorted[-1] if did_stats_sorted else None,
+        "worst_performing": did_stats_sorted[0] if did_stats_sorted else None
+    }
+
+
+@router.get("/time-of-day")
+async def get_time_of_day_analysis(
+    from_date: Optional[date] = Query(None, description="Start date (defaults to last 7 days)"),
+    to_date: Optional[date] = Query(None, description="End date (defaults to today)"),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_active_user)
+):
+    """
+    Get call volume and quality analysis by hour of day.
+    Helps identify optimal staffing hours.
+    """
+    if not from_date:
+        from_date = date.today() - timedelta(days=7)
+    if not to_date:
+        to_date = date.today()
+    
+    start_datetime = datetime.combine(from_date, datetime.min.time())
+    end_datetime = datetime.combine(to_date, datetime.max.time())
+    
+    filters = [
+        CallRecord.created_at >= start_datetime,
+        CallRecord.created_at <= end_datetime,
+    ]
+    
+    if not current_user.is_admin() and current_user.client_id:
+        filters.append(CallRecord.client_id == current_user.client_id)
+    
+    # Get all calls in the period
+    result = await db.execute(
+        select(CallRecord).where(and_(*filters))
+    )
+    calls = result.scalars().all()
+    
+    # Initialize hourly buckets
+    hourly_stats = {hour: {
+        "total_calls": 0,
+        "qualified_calls": 0,  # Had transfer tier HIGH or MID
+        "successful_transfers": 0,
+        "total_debt": 0.0
+    } for hour in range(24)}
+    
+    # Aggregate by hour
+    for call in calls:
+        if call.call_started_at:
+            hour = call.call_started_at.hour
+        elif call.created_at:
+            hour = call.created_at.hour
+        else:
+            continue
+        
+        hourly_stats[hour]["total_calls"] += 1
+        
+        if call.transfer_tier in [TransferTier.HIGH, TransferTier.MID]:
+            hourly_stats[hour]["qualified_calls"] += 1
+        
+        if call.transfer_success:
+            hourly_stats[hour]["successful_transfers"] += 1
+        
+        if call.total_debt:
+            hourly_stats[hour]["total_debt"] += call.total_debt
+    
+    # Convert to list with derived metrics
+    hourly_analysis = []
+    for hour in range(24):
+        stats = hourly_stats[hour]
+        total = stats["total_calls"]
+        qualified = stats["qualified_calls"]
+        
+        hourly_analysis.append({
+            "hour": hour,
+            "hour_label": f"{hour:02d}:00",
+            "total_calls": total,
+            "qualified_calls": qualified,
+            "successful_transfers": stats["successful_transfers"],
+            "qualification_rate": round((qualified / total * 100), 1) if total > 0 else 0,
+            "avg_debt": round(stats["total_debt"] / total, 2) if total > 0 else 0
+        })
+    
+    # Find peak hours
+    peak_volume_hour = max(hourly_analysis, key=lambda x: x["total_calls"])
+    peak_quality_hour = max(hourly_analysis, key=lambda x: x["qualified_calls"])
+    
+    return {
+        "period": {
+            "from_date": from_date.isoformat(),
+            "to_date": to_date.isoformat()
+        },
+        "hourly_breakdown": hourly_analysis,
+        "peak_volume_hour": peak_volume_hour,
+        "peak_quality_hour": peak_quality_hour
+    }
+
+
 def _format_duration(seconds: float) -> str:
     """Format duration in seconds to MM:SS or HH:MM:SS"""
     if not seconds:
