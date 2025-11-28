@@ -9,6 +9,9 @@ from app.database import get_db
 from app.models.phone_number import PhoneNumber, PhoneNumberType
 from app.auth.dependencies import get_current_active_user
 from app.models.models import User
+from app.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 router = APIRouter()
 
@@ -28,66 +31,88 @@ async def list_phone_numbers(
     """
     List all phone numbers assigned to the current user's client.
     """
-    filters = []
-    
-    # Client filtering
-    if not current_user.is_admin() and current_user.client_id:
-        filters.append(PhoneNumber.client_id == current_user.client_id)
-    
-    # Type filter
-    if number_type:
-        try:
-            type_enum = PhoneNumberType(number_type)
-            filters.append(PhoneNumber.number_type == type_enum)
-        except ValueError:
-            pass  # Invalid type, ignore filter
-    
-    if filters:
-        result = await db.execute(
-            select(PhoneNumber)
-            .where(and_(*filters))
-            .order_by(PhoneNumber.number_type, PhoneNumber.number)
-        )
-    else:
-        result = await db.execute(
-            select(PhoneNumber).order_by(PhoneNumber.number_type, PhoneNumber.number)
-        )
-    
-    numbers = result.scalars().all()
-    
-    # Group by type for easier frontend display
-    grouped = {
-        "ai_inbound": [],
-        "transfer_high": [],
-        "transfer_mid": [],
-        "transfer_low": [],
-        "outbound": []
-    }
-    
-    all_numbers = []
-    for n in numbers:
-        number_dict = {
-            "id": str(n.id),
-            "number": n.number,
-            "formatted_number": n.formatted_number,
-            "friendly_name": n.friendly_name,
-            "description": n.description,
-            "number_type": n.number_type.value,
-            "type_label": _get_type_label(n.number_type),
-            "is_active": n.is_active,
-            "last_used_at": n.last_used_at.isoformat() if n.last_used_at else None,
-            "total_calls": n.total_calls
+    try:
+        filters = []
+        
+        # Client filtering
+        if not current_user.is_admin() and current_user.client_id:
+            filters.append(PhoneNumber.client_id == current_user.client_id)
+        
+        # Type filter
+        if number_type:
+            try:
+                type_enum = PhoneNumberType(number_type)
+                filters.append(PhoneNumber.number_type == type_enum)
+            except ValueError:
+                pass  # Invalid type, ignore filter
+        
+        # Execute query
+        if filters:
+            result = await db.execute(
+                select(PhoneNumber)
+                .where(and_(*filters))
+                .order_by(PhoneNumber.number_type, PhoneNumber.number)
+            )
+        else:
+            result = await db.execute(
+                select(PhoneNumber).order_by(PhoneNumber.number_type, PhoneNumber.number)
+            )
+        
+        numbers = result.scalars().all()
+        
+        # Group by type for easier frontend display
+        grouped = {
+            "ai_inbound": [],
+            "transfer_high": [],
+            "transfer_mid": [],
+            "transfer_low": [],
+            "outbound": []
         }
-        all_numbers.append(number_dict)
-        grouped[n.number_type.value].append(number_dict)
-    
-    return {
-        "phone_numbers": all_numbers,
-        "grouped": grouped,
-        "counts": {
-            type_name: len(nums) for type_name, nums in grouped.items()
+        
+        all_numbers = []
+        for n in numbers:
+            try:
+                # Safely access all attributes with null checks
+                number_dict = {
+                    "id": str(n.id) if n.id else None,
+                    "number": n.number if n.number else "",
+                    "formatted_number": n.formatted_number if n.number else "",
+                    "friendly_name": n.friendly_name if n.friendly_name else None,
+                    "description": n.description if n.description else None,
+                    "number_type": n.number_type.value if n.number_type else "ai_inbound",
+                    "type_label": _get_type_label(n.number_type) if n.number_type else "AI Inbound",
+                    "is_active": n.is_active if n.is_active is not None else True,
+                    "last_used_at": n.last_used_at.isoformat() if n.last_used_at else None,
+                    "total_calls": n.total_calls if n.total_calls else "0"
+                }
+                all_numbers.append(number_dict)
+                
+                # Safely add to grouped dict
+                num_type = n.number_type.value if n.number_type else "ai_inbound"
+                if num_type in grouped:
+                    grouped[num_type].append(number_dict)
+                else:
+                    # If type doesn't match expected values, add to ai_inbound as fallback
+                    grouped["ai_inbound"].append(number_dict)
+            except Exception as e:
+                logger.error(f"Error processing phone number {n.id if hasattr(n, 'id') else 'unknown'}: {e}", exc_info=True)
+                # Skip this number and continue with others
+                continue
+        
+        return {
+            "phone_numbers": all_numbers,
+            "grouped": grouped,
+            "counts": {
+                type_name: len(nums) for type_name, nums in grouped.items()
+            }
         }
-    }
+    except Exception as e:
+        logger.error(f"Error in list_phone_numbers: {e}", exc_info=True)
+        # Re-raise as HTTPException so our global handler can add CORS headers
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to retrieve phone numbers: {str(e)}"
+        )
 
 
 @router.get("/{number_id}")

@@ -63,6 +63,8 @@ class PhoneNumber(BaseModel):
     @property
     def formatted_number(self) -> str:
         """Return formatted phone number for display"""
+        if not self.number:
+            return ""
         # Remove +1 prefix if present and format
         num = self.number.replace("+1", "").replace("-", "").replace(" ", "")
         if len(num) == 10:
