@@ -1,8 +1,12 @@
-from fastapi import FastAPI, Depends
+from fastapi import FastAPI, Depends, Request, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from fastapi.exceptions import RequestValidationError
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import text
 import uvicorn
+from typing import Callable
 from app.config import settings
 from app.database import get_db
 from app.logging_config import configure_logging, get_logger
@@ -20,6 +24,9 @@ app = FastAPI(
     version="2.0.0"
 )
 
+# Frontend origin - primary production frontend
+FRONTEND_ORIGIN = "https://ai-voice-agent-frontend-l6bu.onrender.com"
+
 # CORS middleware - configure for production
 # Note: Wildcards don't work with allow_credentials=True, so we list all possible frontend URLs
 app.add_middleware(
@@ -27,7 +34,7 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:3000",  # Next.js dev server
         "http://localhost:8000",
-        "https://ai-voice-agent-frontend-l6bu.onrender.com",  # Frontend on Render (primary)
+        FRONTEND_ORIGIN,  # Frontend on Render (primary)
         "https://ai-voice-agent-frontend-16bu.onrender.com",  # Frontend on Render (alternate - if different)
         "https://ai-voice-agent-30yv.onrender.com",  # Backend on Render (for Swagger)
     ],
@@ -36,6 +43,83 @@ app.add_middleware(
     allow_headers=["*"],
     expose_headers=["*"],
 )
+
+# Debug version header for deployment verification
+DEBUG_VERSION = "2025-01-28-cors-fix"
+
+
+def add_cors_headers(response: JSONResponse) -> JSONResponse:
+    """Add CORS headers and debug version to response."""
+    response.headers["Access-Control-Allow-Origin"] = FRONTEND_ORIGIN
+    response.headers["Access-Control-Allow-Credentials"] = "true"
+    response.headers["Access-Control-Allow-Methods"] = "GET,POST,PUT,DELETE,OPTIONS,PATCH"
+    response.headers["Access-Control-Allow-Headers"] = "Content-Type,Authorization"
+    response.headers["X-Debug-Version"] = DEBUG_VERSION
+    return response
+
+
+@app.middleware("http")
+async def add_cors_and_debug_headers(request: Request, call_next: Callable):
+    """
+    Middleware to ensure CORS headers and debug version are on ALL responses.
+    This runs after CORSMiddleware to guarantee headers are present even on errors.
+    """
+    # Handle OPTIONS preflight requests explicitly
+    if request.method == "OPTIONS":
+        response = JSONResponse(content={}, status_code=204)
+        return add_cors_headers(response)
+    
+    # Process the request - let FastAPI handle exceptions normally
+    # Our exception handlers will catch them and add CORS headers
+    response = await call_next(request)
+    
+    # Ensure CORS headers are on the response
+    # This is a safety net in case CORSMiddleware didn't add them
+    if "Access-Control-Allow-Origin" not in response.headers:
+        response.headers["Access-Control-Allow-Origin"] = FRONTEND_ORIGIN
+        response.headers["Access-Control-Allow-Credentials"] = "true"
+        response.headers["Access-Control-Allow-Methods"] = "GET,POST,PUT,DELETE,OPTIONS,PATCH"
+        response.headers["Access-Control-Allow-Headers"] = "Content-Type,Authorization"
+    
+    # Always add debug version header to verify deployment
+    response.headers["X-Debug-Version"] = DEBUG_VERSION
+    
+    return response
+
+
+# Global exception handler to ensure CORS headers on all error responses
+@app.exception_handler(StarletteHTTPException)
+async def http_exception_handler(request: Request, exc: StarletteHTTPException):
+    """Handle HTTP exceptions and ensure CORS headers are present."""
+    response = JSONResponse(
+        status_code=exc.status_code,
+        content={"detail": exc.detail}
+    )
+    return add_cors_headers(response)
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    """Handle validation errors and ensure CORS headers are present."""
+    response = JSONResponse(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        content={"detail": exc.errors()}
+    )
+    return add_cors_headers(response)
+
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    """Global exception handler to catch all unhandled exceptions and ensure CORS headers."""
+    logger.error(f"Unhandled exception: {exc}", exc_info=True)
+    response = JSONResponse(
+        status_code=500,
+        content={
+            "detail": "Internal server error",
+            "error": str(exc) if settings.DEBUG else "An unexpected error occurred"
+        }
+    )
+    return add_cors_headers(response)
 
 # Auth routes
 app.include_router(auth_router, prefix='/auth', tags=["Authentication"])
