@@ -252,7 +252,7 @@ export async function getCalls(params?: {
   if (params?.limit) searchParams.set('limit', String(params.limit));
   
   const query = searchParams.toString();
-  return apiFetch(`/api/calls${query ? `?${query}` : ''}`);
+  return apiFetch(`/api/calls/${query ? `?${query}` : ''}`);
 }
 
 export async function getCallDetails(callId: string) {
