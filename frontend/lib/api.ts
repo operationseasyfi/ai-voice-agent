@@ -255,8 +255,28 @@ export async function getCalls(params?: {
   return apiFetch(`/api/calls/${query ? `?${query}` : ''}`);
 }
 
-export async function getCallDetails(callId: string) {
-  return apiFetch(`/api/calls/${callId}`);
+export interface CallDetails extends CallRecord {
+  client_id?: string;
+  agent_id?: string;
+  direction?: string;
+  transfer_did?: string;
+  dnc_phrase_detected?: string;
+  loan_amount?: number;
+  funds_purpose?: string;
+  employment_status?: string;
+  credit_card_debt?: number;
+  personal_loan_debt?: number;
+  other_debt?: number;
+  monthly_income?: number;
+  intake_data?: Record<string, unknown>;
+  transcript?: string;
+  conversation_summary?: string;
+  steps_completed?: string[];
+  call_ended_at?: string;
+}
+
+export async function getCallDetails(callId: string): Promise<CallDetails> {
+  return apiFetch<CallDetails>(`/api/calls/${callId}`);
 }
 
 export async function getConcurrentCalls(): Promise<{ concurrent_calls: number; timestamp: string }> {

@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button"
 import { AudioPlayer } from "@/components/ui/audio-player"
 import { TranscriptViewer } from "@/components/ui/transcript-viewer"
 import { Search, X, Phone, TrendingUp, Clock, AlertTriangle, Download, FileText } from "lucide-react"
-import { getCalls, getAgents, getDashboardStats, getCallDetails, getTierColor, getTierLabel, getCallsExportUrl, type CallRecord, type Agent, type DashboardStats } from "@/lib/api"
+import { getCalls, getAgents, getDashboardStats, getCallDetails, getTierColor, getTierLabel, getCallsExportUrl, type CallRecord, type Agent, type DashboardStats, type CallDetails } from "@/lib/api"
 
 export default function CallHistoryPage() {
   const searchParams = useSearchParams()
@@ -19,7 +19,7 @@ export default function CallHistoryPage() {
   const [stats, setStats] = useState<DashboardStats | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [total, setTotal] = useState(0)
-  const [selectedCall, setSelectedCall] = useState<any>(null)
+  const [selectedCall, setSelectedCall] = useState<CallDetails | null>(null)
   const [callTranscript, setCallTranscript] = useState<string | null>(null)
   const [loadingDetails, setLoadingDetails] = useState(false)
   
