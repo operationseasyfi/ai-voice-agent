@@ -2,11 +2,12 @@
 
 import { useState, useEffect } from "react"
 import Link from "next/link"
+import { useRouter } from "next/navigation"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { AudioPlayer } from "@/components/ui/audio-player"
-import { Phone, History, FileText, Users, TrendingUp, Clock, AlertTriangle, Activity, PhoneOff, DollarSign } from "lucide-react"
+import { Phone, History, FileText, Users, TrendingUp, Clock, AlertTriangle, Activity, PhoneOff, DollarSign, ExternalLink } from "lucide-react"
 import {
   getDashboardStats,
   getAgentsOverview,
@@ -25,6 +26,8 @@ import {
 } from "@/lib/api"
 
 export default function DashboardPage() {
+  const router = useRouter()
+  
   // State
   const [stats, setStats] = useState<DashboardStats | null>(null)
   const [agentOverviews, setAgentOverviews] = useState<AgentOverview[]>([])
@@ -39,6 +42,16 @@ export default function DashboardPage() {
   const [selectedAgent, setSelectedAgent] = useState<string>("")
   const [fromDate, setFromDate] = useState<string>(new Date().toISOString().split('T')[0])
   const [toDate, setToDate] = useState<string>(new Date().toISOString().split('T')[0])
+
+  // Navigation helper for drill-down
+  const navigateToCallHistory = (filters: Record<string, string>) => {
+    const params = new URLSearchParams({
+      from_date: fromDate,
+      to_date: toDate,
+      ...filters
+    })
+    router.push(`/call-history?${params.toString()}`)
+  }
 
   // Fetch data
   useEffect(() => {
@@ -222,12 +235,15 @@ export default function DashboardPage() {
         </Link>
       </div>
 
-      {/* Stats Cards - Color coded based on performance */}
+      {/* Stats Cards - Color coded and clickable for drill-down */}
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-5">
-        <Card>
+        <Card 
+          className="cursor-pointer hover:bg-muted/50 transition-colors group"
+          onClick={() => navigateToCallHistory({})}
+        >
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle className="text-sm font-medium">Total Calls</CardTitle>
-            <Phone className="h-4 w-4 text-muted-foreground" />
+            <ExternalLink className="h-4 w-4 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />
           </CardHeader>
           <CardContent>
             <div className={`text-2xl font-bold ${stats ? getPerformanceColor(stats.total_calls, { good: 50, warning: 20 }) : ''}`}>
@@ -239,10 +255,13 @@ export default function DashboardPage() {
           </CardContent>
         </Card>
 
-        <Card>
+        <Card 
+          className="cursor-pointer hover:bg-muted/50 transition-colors group"
+          onClick={() => navigateToCallHistory({ disconnection_reason: 'transferred' })}
+        >
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle className="text-sm font-medium">Successful Transfers</CardTitle>
-            <TrendingUp className="h-4 w-4 text-muted-foreground" />
+            <ExternalLink className="h-4 w-4 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />
           </CardHeader>
           <CardContent>
             <div className={`text-2xl font-bold ${stats ? getPerformanceColor(stats.transfer_rate, { good: 30, warning: 15 }) : ''}`}>
@@ -269,10 +288,13 @@ export default function DashboardPage() {
           </CardContent>
         </Card>
 
-        <Card>
+        <Card 
+          className="cursor-pointer hover:bg-muted/50 transition-colors group"
+          onClick={() => navigateToCallHistory({})}
+        >
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle className="text-sm font-medium">Avg Duration</CardTitle>
-            <Activity className="h-4 w-4 text-muted-foreground" />
+            <ExternalLink className="h-4 w-4 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />
           </CardHeader>
           <CardContent>
             <div className={`text-2xl font-bold ${stats ? getPerformanceColor(stats.avg_duration_seconds, { good: 120, warning: 60 }) : ''}`}>
@@ -284,17 +306,20 @@ export default function DashboardPage() {
           </CardContent>
         </Card>
 
-        <Card>
+        <Card 
+          className="cursor-pointer hover:bg-muted/50 transition-colors group"
+          onClick={() => navigateToCallHistory({ is_dnc: 'true' })}
+        >
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle className="text-sm font-medium">DNC Detected</CardTitle>
-            <AlertTriangle className="h-4 w-4 text-muted-foreground" />
+            <ExternalLink className="h-4 w-4 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />
           </CardHeader>
           <CardContent>
             <div className={`text-2xl font-bold ${stats && stats.dnc_count > 5 ? 'text-red-600 dark:text-red-400' : stats && stats.dnc_count > 0 ? 'text-amber-600 dark:text-amber-400' : 'text-green-600 dark:text-green-400'}`}>
               {isLoading ? "..." : stats?.dnc_count}
             </div>
             <p className="text-xs text-muted-foreground">
-              <Link href="/dnc" className="text-primary hover:underline">View DNC list</Link>
+              Click to view DNC calls
             </p>
           </CardContent>
         </Card>
@@ -355,30 +380,39 @@ export default function DashboardPage() {
         </Card>
       )}
 
-      {/* Transfer Tiers Breakdown - Color coded */}
+      {/* Transfer Tiers Breakdown - Color coded & clickable */}
       {stats && (stats.calls_by_tier.high > 0 || stats.calls_by_tier.mid > 0 || stats.calls_by_tier.low > 0) && (
         <Card>
           <CardHeader>
             <CardTitle>Transfers by Tier</CardTitle>
-            <CardDescription>Breakdown of calls routed to each transfer queue</CardDescription>
+            <CardDescription>Click any tier to view those calls</CardDescription>
           </CardHeader>
           <CardContent>
             <div className="grid gap-4 md:grid-cols-3">
-              <div className={`flex items-center justify-between p-4 rounded-lg border ${getTierColor('high')}`}>
+              <div 
+                className={`flex items-center justify-between p-4 rounded-lg border cursor-pointer hover:opacity-80 transition-opacity ${getTierColor('high')}`}
+                onClick={() => navigateToCallHistory({ transfer_tier: 'high' })}
+              >
                 <div>
                   <p className="text-sm font-medium">High Tier ($35K+)</p>
                   <p className="text-xs opacity-75">Premium queue</p>
                 </div>
                 <span className="text-2xl font-bold">{stats.calls_by_tier.high}</span>
               </div>
-              <div className={`flex items-center justify-between p-4 rounded-lg border ${getTierColor('mid')}`}>
+              <div 
+                className={`flex items-center justify-between p-4 rounded-lg border cursor-pointer hover:opacity-80 transition-opacity ${getTierColor('mid')}`}
+                onClick={() => navigateToCallHistory({ transfer_tier: 'mid' })}
+              >
                 <div>
                   <p className="text-sm font-medium">Mid Tier ($10K-$35K)</p>
                   <p className="text-xs opacity-75">Standard queue</p>
                 </div>
                 <span className="text-2xl font-bold">{stats.calls_by_tier.mid}</span>
               </div>
-              <div className={`flex items-center justify-between p-4 rounded-lg border ${getTierColor('low')}`}>
+              <div 
+                className={`flex items-center justify-between p-4 rounded-lg border cursor-pointer hover:opacity-80 transition-opacity ${getTierColor('low')}`}
+                onClick={() => navigateToCallHistory({ transfer_tier: 'low' })}
+              >
                 <div>
                   <p className="text-sm font-medium">Low Tier (&lt;$10K)</p>
                   <p className="text-xs opacity-75">Entry queue</p>
