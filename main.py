@@ -20,20 +20,20 @@ app = FastAPI(
     version="2.0.0"
 )
 
-# CORS middleware - configure appropriately for production
+# CORS middleware - configure for production
+# Note: Wildcards don't work with allow_credentials=True
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
         "http://localhost:3000",  # Next.js dev server
         "http://localhost:8000",
-        "https://*.railway.app",  # Railway deployments
-        "https://*.onrender.com",  # Render deployments
         "https://ai-voice-agent-frontend-l6bu.onrender.com",  # Frontend on Render
-        "https://ai-voice-agent-30yv.onrender.com",  # Backend on Render
+        "https://ai-voice-agent-30yv.onrender.com",  # Backend on Render (for Swagger)
     ],
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
     allow_headers=["*"],
+    expose_headers=["*"],
 )
 
 # Auth routes

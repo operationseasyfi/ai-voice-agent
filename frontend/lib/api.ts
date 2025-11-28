@@ -3,12 +3,13 @@
  * Handles authentication and all API calls
  */
 
-// For production, default to HTTPS backend URL
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || (
-  typeof window !== 'undefined' && window.location.hostname.includes('onrender.com')
+// API Base URL configuration
+// In production (Render), use the deployed backend URL
+// In development, use localhost
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL 
+  || (process.env.NODE_ENV === 'production' 
     ? 'https://ai-voice-agent-30yv.onrender.com'
-    : 'http://localhost:8000'
-);
+    : 'http://localhost:8000');
 
 // Token storage
 let authToken: string | null = null;
