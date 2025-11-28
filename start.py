@@ -137,11 +137,14 @@ def run_migrations():
 def start_app():
     """Start the Uvicorn server."""
     print("🚀 Starting application...")
+    import os
+    port = os.environ.get("PORT", "8000")
     subprocess.run([
         "uvicorn", "main:app",
         "--host", "0.0.0.0",
-        "--port", "8000",
-        "--workers", "4"
+        "--port", port,
+        "--proxy-headers",           # CRITICAL: Trust Render's proxy
+        "--forwarded-allow-ips", "*"  # CRITICAL: Allow all forwarded IPs
     ])
 
 if __name__ == "__main__":
