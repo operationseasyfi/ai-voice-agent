@@ -485,3 +485,157 @@ export async function getTransfers(params?: {
   return apiFetch(`/api/dashboard/transfers${query ? `?${query}` : ''}`);
 }
 
+// ============================================
+// Lost Transfers API
+// ============================================
+
+export interface LostTransfersResponse {
+  period: {
+    from_date: string;
+    to_date: string;
+  };
+  total_lost: number;
+  by_tier: {
+    high: number;
+    mid: number;
+    low: number;
+  };
+  estimated_lost_revenue: number;
+  skip: number;
+  limit: number;
+  calls: CallRecord[];
+}
+
+export async function getLostTransfers(params?: {
+  from_date?: string;
+  to_date?: string;
+  tier?: string;
+  skip?: number;
+  limit?: number;
+}): Promise<LostTransfersResponse> {
+  const searchParams = new URLSearchParams();
+  if (params?.from_date) searchParams.set('from_date', params.from_date);
+  if (params?.to_date) searchParams.set('to_date', params.to_date);
+  if (params?.tier) searchParams.set('tier', params.tier);
+  if (params?.skip) searchParams.set('skip', String(params.skip));
+  if (params?.limit) searchParams.set('limit', String(params.limit));
+  
+  const query = searchParams.toString();
+  return apiFetch(`/api/dashboard/lost-transfers${query ? `?${query}` : ''}`);
+}
+
+// ============================================
+// Pickup Rates API
+// ============================================
+
+export interface DIDPerformance {
+  did: string;
+  tier: string;
+  total_attempts: number;
+  successful: number;
+  lost: number;
+  pickup_rate: number;
+  avg_wait_seconds: number;
+}
+
+export interface PickupRatesResponse {
+  period: {
+    from_date: string;
+    to_date: string;
+  };
+  did_performance: DIDPerformance[];
+  best_performing: DIDPerformance | null;
+  worst_performing: DIDPerformance | null;
+}
+
+export async function getPickupRates(params?: {
+  from_date?: string;
+  to_date?: string;
+}): Promise<PickupRatesResponse> {
+  const searchParams = new URLSearchParams();
+  if (params?.from_date) searchParams.set('from_date', params.from_date);
+  if (params?.to_date) searchParams.set('to_date', params.to_date);
+  
+  const query = searchParams.toString();
+  return apiFetch(`/api/dashboard/pickup-rates${query ? `?${query}` : ''}`);
+}
+
+// ============================================
+// Time of Day Analytics API
+// ============================================
+
+export interface HourlyBreakdown {
+  hour: number;
+  hour_label: string;
+  total_calls: number;
+  qualified_calls: number;
+  successful_transfers: number;
+  qualification_rate: number;
+  avg_debt: number;
+}
+
+export interface TimeOfDayResponse {
+  period: {
+    from_date: string;
+    to_date: string;
+  };
+  hourly_breakdown: HourlyBreakdown[];
+  peak_volume_hour: HourlyBreakdown;
+  peak_quality_hour: HourlyBreakdown;
+}
+
+export async function getTimeOfDayAnalysis(params?: {
+  from_date?: string;
+  to_date?: string;
+}): Promise<TimeOfDayResponse> {
+  const searchParams = new URLSearchParams();
+  if (params?.from_date) searchParams.set('from_date', params.from_date);
+  if (params?.to_date) searchParams.set('to_date', params.to_date);
+  
+  const query = searchParams.toString();
+  return apiFetch(`/api/dashboard/time-of-day${query ? `?${query}` : ''}`);
+}
+
+// ============================================
+// Utility Functions
+// ============================================
+
+/**
+ * Get color class based on performance threshold
+ */
+export function getPerformanceColor(value: number, thresholds: { good: number; warning: number }, higherIsBetter = true): string {
+  if (higherIsBetter) {
+    if (value >= thresholds.good) return 'text-green-600 dark:text-green-400';
+    if (value >= thresholds.warning) return 'text-amber-600 dark:text-amber-400';
+    return 'text-red-600 dark:text-red-400';
+  } else {
+    if (value <= thresholds.good) return 'text-green-600 dark:text-green-400';
+    if (value <= thresholds.warning) return 'text-amber-600 dark:text-amber-400';
+    return 'text-red-600 dark:text-red-400';
+  }
+}
+
+/**
+ * Get tier badge color
+ */
+export function getTierColor(tier: string): string {
+  switch (tier?.toLowerCase()) {
+    case 'high': return 'bg-amber-500/20 text-amber-700 dark:text-amber-300 border-amber-500/30';
+    case 'mid': return 'bg-slate-400/20 text-slate-700 dark:text-slate-300 border-slate-400/30';
+    case 'low': return 'bg-orange-600/20 text-orange-700 dark:text-orange-300 border-orange-600/30';
+    default: return 'bg-gray-500/20 text-gray-700 dark:text-gray-300 border-gray-500/30';
+  }
+}
+
+/**
+ * Get tier label
+ */
+export function getTierLabel(tier: string): string {
+  switch (tier?.toLowerCase()) {
+    case 'high': return 'High ($35K+)';
+    case 'mid': return 'Mid ($10K-$35K)';
+    case 'low': return 'Low (<$10K)';
+    default: return tier || 'N/A';
+  }
+}
+

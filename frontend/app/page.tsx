@@ -6,17 +6,22 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { AudioPlayer } from "@/components/ui/audio-player"
-import { Phone, History, FileText, Users, TrendingUp, Clock, AlertTriangle, Activity } from "lucide-react"
+import { Phone, History, FileText, Users, TrendingUp, Clock, AlertTriangle, Activity, PhoneOff, DollarSign } from "lucide-react"
 import {
   getDashboardStats,
   getAgentsOverview,
   getCalls,
   getConcurrentCalls,
   getAgents,
+  getLostTransfers,
+  getPerformanceColor,
+  getTierColor,
+  getTierLabel,
   type DashboardStats,
   type AgentOverview,
   type CallRecord,
-  type Agent
+  type Agent,
+  type LostTransfersResponse
 } from "@/lib/api"
 
 export default function DashboardPage() {
@@ -26,6 +31,7 @@ export default function DashboardPage() {
   const [recentCalls, setRecentCalls] = useState<CallRecord[]>([])
   const [agents, setAgents] = useState<Agent[]>([])
   const [concurrentCalls, setConcurrentCalls] = useState(0)
+  const [lostTransfers, setLostTransfers] = useState<LostTransfersResponse | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   
@@ -47,17 +53,19 @@ export default function DashboardPage() {
           ...(selectedAgent && { agent_id: selectedAgent })
         }
 
-        const [statsData, overviewData, callsData, agentsData] = await Promise.all([
+        const [statsData, overviewData, callsData, agentsData, lostData] = await Promise.all([
           getDashboardStats(params),
           getAgentsOverview({ from_date: fromDate, to_date: toDate }),
           getCalls({ ...params, limit: 10 }),
-          getAgents({ is_active: true })
+          getAgents({ is_active: true }),
+          getLostTransfers({ from_date: fromDate, to_date: toDate, limit: 5 }).catch(() => null)
         ])
 
         setStats(statsData)
         setAgentOverviews(overviewData.agents)
         setRecentCalls(callsData.calls)
         setAgents(agentsData.agents)
+        setLostTransfers(lostData)
 
         // Get concurrent calls (non-blocking)
         getConcurrentCalls()
@@ -214,7 +222,7 @@ export default function DashboardPage() {
         </Link>
       </div>
 
-      {/* Stats Cards */}
+      {/* Stats Cards - Color coded based on performance */}
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-5">
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
@@ -222,7 +230,7 @@ export default function DashboardPage() {
             <Phone className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">
+            <div className={`text-2xl font-bold ${stats ? getPerformanceColor(stats.total_calls, { good: 50, warning: 20 }) : ''}`}>
               {isLoading ? "..." : stats?.total_calls.toLocaleString()}
             </div>
             <p className="text-xs text-muted-foreground">
@@ -237,10 +245,10 @@ export default function DashboardPage() {
             <TrendingUp className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">
+            <div className={`text-2xl font-bold ${stats ? getPerformanceColor(stats.transfer_rate, { good: 30, warning: 15 }) : ''}`}>
               {isLoading ? "..." : stats?.successful_transfers.toLocaleString()}
             </div>
-            <p className="text-xs text-muted-foreground">
+            <p className={`text-xs ${stats ? getPerformanceColor(stats.transfer_rate, { good: 30, warning: 15 }) : 'text-muted-foreground'}`}>
               {stats?.transfer_rate}% transfer rate
             </p>
           </CardContent>
@@ -252,7 +260,7 @@ export default function DashboardPage() {
             <Clock className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">
+            <div className="text-2xl font-bold text-primary">
               {isLoading ? "..." : `${stats?.total_duration_minutes.toLocaleString()} min`}
             </div>
             <p className="text-xs text-muted-foreground">
@@ -267,7 +275,7 @@ export default function DashboardPage() {
             <Activity className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">
+            <div className={`text-2xl font-bold ${stats ? getPerformanceColor(stats.avg_duration_seconds, { good: 120, warning: 60 }) : ''}`}>
               {isLoading ? "..." : stats?.avg_duration_formatted}
             </div>
             <p className="text-xs text-muted-foreground">
@@ -282,7 +290,7 @@ export default function DashboardPage() {
             <AlertTriangle className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
-            <div className="text-2xl font-bold">
+            <div className={`text-2xl font-bold ${stats && stats.dnc_count > 5 ? 'text-red-600 dark:text-red-400' : stats && stats.dnc_count > 0 ? 'text-amber-600 dark:text-amber-400' : 'text-green-600 dark:text-green-400'}`}>
               {isLoading ? "..." : stats?.dnc_count}
             </div>
             <p className="text-xs text-muted-foreground">
@@ -292,7 +300,62 @@ export default function DashboardPage() {
         </Card>
       </div>
 
-      {/* Transfer Tiers Breakdown */}
+      {/* Lost Transfers Alert - High Priority */}
+      {lostTransfers && lostTransfers.total_lost > 0 && (
+        <Card className="border-red-500/50 bg-red-500/5">
+          <CardHeader className="pb-2">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <PhoneOff className="h-5 w-5 text-red-500" />
+                <CardTitle className="text-red-600 dark:text-red-400">Lost Transfers Alert</CardTitle>
+              </div>
+              <Badge variant="destructive" className="text-lg px-3 py-1">
+                {lostTransfers.total_lost} Lost
+              </Badge>
+            </div>
+            <CardDescription>
+              Qualified calls where no closer answered - missed revenue opportunities
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="grid gap-4 md:grid-cols-4">
+              <div className="flex items-center justify-between p-3 rounded-lg bg-red-500/10">
+                <div>
+                  <p className="text-sm font-medium">Estimated Lost Revenue</p>
+                  <p className="text-xs text-muted-foreground">Based on tier values</p>
+                </div>
+                <div className="flex items-center gap-1 text-red-600 dark:text-red-400">
+                  <DollarSign className="h-5 w-5" />
+                  <span className="text-2xl font-bold">{lostTransfers.estimated_lost_revenue.toLocaleString()}</span>
+                </div>
+              </div>
+              <div className={`flex items-center justify-between p-3 rounded-lg border ${getTierColor('high')}`}>
+                <div>
+                  <p className="text-sm font-medium">High Tier</p>
+                  <p className="text-xs text-muted-foreground">$35K+ debt</p>
+                </div>
+                <span className="text-2xl font-bold">{lostTransfers.by_tier.high}</span>
+              </div>
+              <div className={`flex items-center justify-between p-3 rounded-lg border ${getTierColor('mid')}`}>
+                <div>
+                  <p className="text-sm font-medium">Mid Tier</p>
+                  <p className="text-xs text-muted-foreground">$10K-$35K debt</p>
+                </div>
+                <span className="text-2xl font-bold">{lostTransfers.by_tier.mid}</span>
+              </div>
+              <div className={`flex items-center justify-between p-3 rounded-lg border ${getTierColor('low')}`}>
+                <div>
+                  <p className="text-sm font-medium">Low Tier</p>
+                  <p className="text-xs text-muted-foreground">&lt;$10K debt</p>
+                </div>
+                <span className="text-2xl font-bold">{lostTransfers.by_tier.low}</span>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Transfer Tiers Breakdown - Color coded */}
       {stats && (stats.calls_by_tier.high > 0 || stats.calls_by_tier.mid > 0 || stats.calls_by_tier.low > 0) && (
         <Card>
           <CardHeader>
@@ -301,26 +364,26 @@ export default function DashboardPage() {
           </CardHeader>
           <CardContent>
             <div className="grid gap-4 md:grid-cols-3">
-              <div className="flex items-center justify-between p-4 rounded-lg border">
+              <div className={`flex items-center justify-between p-4 rounded-lg border ${getTierColor('high')}`}>
                 <div>
                   <p className="text-sm font-medium">High Tier ($35K+)</p>
-                  <p className="text-xs text-muted-foreground">Premium queue</p>
+                  <p className="text-xs opacity-75">Premium queue</p>
                 </div>
-                <span className="text-2xl font-bold text-green-600">{stats.calls_by_tier.high}</span>
+                <span className="text-2xl font-bold">{stats.calls_by_tier.high}</span>
               </div>
-              <div className="flex items-center justify-between p-4 rounded-lg border">
+              <div className={`flex items-center justify-between p-4 rounded-lg border ${getTierColor('mid')}`}>
                 <div>
                   <p className="text-sm font-medium">Mid Tier ($10K-$35K)</p>
-                  <p className="text-xs text-muted-foreground">Standard queue</p>
+                  <p className="text-xs opacity-75">Standard queue</p>
                 </div>
-                <span className="text-2xl font-bold text-blue-600">{stats.calls_by_tier.mid}</span>
+                <span className="text-2xl font-bold">{stats.calls_by_tier.mid}</span>
               </div>
-              <div className="flex items-center justify-between p-4 rounded-lg border">
+              <div className={`flex items-center justify-between p-4 rounded-lg border ${getTierColor('low')}`}>
                 <div>
                   <p className="text-sm font-medium">Low Tier (&lt;$10K)</p>
-                  <p className="text-xs text-muted-foreground">Entry queue</p>
+                  <p className="text-xs opacity-75">Entry queue</p>
                 </div>
-                <span className="text-2xl font-bold text-amber-600">{stats.calls_by_tier.low}</span>
+                <span className="text-2xl font-bold">{stats.calls_by_tier.low}</span>
               </div>
             </div>
           </CardContent>
@@ -405,9 +468,9 @@ export default function DashboardPage() {
                     <div className="flex items-center gap-2">
                       <p className="font-medium">{call.lead_name || "Unknown"}</p>
                       {call.transfer_tier && call.transfer_tier !== "none" && (
-                        <Badge variant="outline" size="sm">
-                          {call.transfer_tier.toUpperCase()}
-                        </Badge>
+                        <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium border ${getTierColor(call.transfer_tier)}`}>
+                          {getTierLabel(call.transfer_tier)}
+                        </span>
                       )}
                       {call.is_dnc_flagged && (
                         <Badge variant="destructive" size="sm">DNC</Badge>
@@ -418,6 +481,7 @@ export default function DashboardPage() {
                       {call.disconnection_reason === "transferred" ? "Transferred" : 
                        call.disconnection_reason === "caller_hangup" ? "Caller hung up" :
                        call.disconnection_reason === "dnc_detected" ? "DNC detected" :
+                       call.disconnection_reason === "no_answer" ? "No answer" :
                        call.disconnection_reason}
                       {call.total_debt > 0 && ` • $${call.total_debt.toLocaleString()} debt`}
                     </p>
