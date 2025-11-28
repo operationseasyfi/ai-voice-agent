@@ -3,20 +3,26 @@
  * Handles authentication and all API calls
  */
 
-// API Base URL configuration - hardcoded for production reliability
+// API Base URL configuration - ALWAYS use HTTPS in production
 const getApiBaseUrl = (): string => {
   // Check for env var first (allows local override)
   if (process.env.NEXT_PUBLIC_API_URL) {
-    return process.env.NEXT_PUBLIC_API_URL;
+    let url = process.env.NEXT_PUBLIC_API_URL;
+    // Force HTTPS if it's a production URL
+    if (url.includes('onrender.com') || url.includes('render.com')) {
+      url = url.replace('http://', 'https://');
+    }
+    return url;
   }
   
   // In browser, check if we're on Render
   if (typeof window !== 'undefined') {
     const hostname = window.location.hostname;
+    // ALWAYS use HTTPS for Render deployments
     if (hostname.includes('onrender.com') || hostname.includes('render.com')) {
       return 'https://ai-voice-agent-30yv.onrender.com';
     }
-    // Any non-localhost production environment
+    // Any non-localhost production environment - use HTTPS
     if (!hostname.includes('localhost') && !hostname.includes('127.0.0.1')) {
       return 'https://ai-voice-agent-30yv.onrender.com';
     }
@@ -26,7 +32,15 @@ const getApiBaseUrl = (): string => {
   return 'http://localhost:8000';
 };
 
-const API_BASE_URL = getApiBaseUrl();
+// Get base URL and ensure HTTPS in production
+let API_BASE_URL = getApiBaseUrl();
+
+// Runtime check: Force HTTPS if we're in production and URL is HTTP
+if (typeof window !== 'undefined' && API_BASE_URL.startsWith('http://') && 
+    !API_BASE_URL.includes('localhost') && !API_BASE_URL.includes('127.0.0.1')) {
+  console.warn('API URL is HTTP in production, forcing HTTPS');
+  API_BASE_URL = API_BASE_URL.replace('http://', 'https://');
+}
 
 // Token storage
 let authToken: string | null = null;

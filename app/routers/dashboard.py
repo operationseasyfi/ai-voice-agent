@@ -10,6 +10,9 @@ from app.models.call_records import CallRecord, DisconnectionReason, TransferTie
 from app.models.agent import Agent
 from app.auth.dependencies import get_current_active_user
 from app.models.models import User
+from app.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 router = APIRouter()
 
@@ -88,36 +91,44 @@ async def get_dashboard_stats(
     )
     dnc_count = dnc_result.scalar() or 0
     
-    # Calls by tier
-    tier_result = await db.execute(
-        select(
-            CallRecord.transfer_tier,
-            func.count(CallRecord.id)
-        ).where(and_(*base_filter))
-        .group_by(CallRecord.transfer_tier)
-    )
+    # Calls by tier - handle case where column might not exist yet
     calls_by_tier = {
         "high": 0,
         "mid": 0,
         "low": 0,
         "none": 0
     }
-    for row in tier_result:
-        if row[0]:
-            calls_by_tier[row[0].value] = row[1]
+    try:
+        tier_result = await db.execute(
+            select(
+                CallRecord.transfer_tier,
+                func.count(CallRecord.id)
+            ).where(and_(*base_filter))
+            .group_by(CallRecord.transfer_tier)
+        )
+        for row in tier_result:
+            if row[0]:
+                calls_by_tier[row[0].value] = row[1]
+    except Exception as e:
+        # If transfer_tier column doesn't exist, return empty tier breakdown
+        logger.warning(f"transfer_tier column not found, returning empty breakdown: {e}")
     
-    # Calls by disconnection reason
-    reason_result = await db.execute(
-        select(
-            CallRecord.disconnection_reason,
-            func.count(CallRecord.id)
-        ).where(and_(*base_filter))
-        .group_by(CallRecord.disconnection_reason)
-    )
+    # Calls by disconnection reason - handle case where column might not exist yet
     calls_by_reason = {}
-    for row in reason_result:
-        if row[0]:
-            calls_by_reason[row[0].value] = row[1]
+    try:
+        reason_result = await db.execute(
+            select(
+                CallRecord.disconnection_reason,
+                func.count(CallRecord.id)
+            ).where(and_(*base_filter))
+            .group_by(CallRecord.disconnection_reason)
+        )
+        for row in reason_result:
+            if row[0]:
+                calls_by_reason[row[0].value] = row[1]
+    except Exception as e:
+        # If disconnection_reason column doesn't exist, return empty reason breakdown
+        logger.warning(f"disconnection_reason column not found, returning empty breakdown: {e}")
     
     return {
         "period": {
