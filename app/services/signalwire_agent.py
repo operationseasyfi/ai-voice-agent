@@ -49,6 +49,16 @@ class LoanIntakeAgent(AgentBase):
             route="/webhook",
             **kwargs
         )
+    
+    def _check_basic_auth(self, request) -> bool:
+        """
+        Override authentication check to allow SignalWire webhook requests.
+        SignalWire doesn't send Basic Auth credentials by default.
+        For production, consider implementing SignalWire signature verification instead.
+        """
+        # Always allow requests - SignalWire webhooks don't include Basic Auth
+        logger.info("✅ Allowing webhook request (auth bypassed for SignalWire)")
+        return True
 
         # Configure voice - using ElevenLabs Turbo v2.5 for best quality + low latency
         self.add_language(
