@@ -45,41 +45,33 @@ class LoanIntakeAgent(AgentBase):
     def __init__(self, **kwargs):
         # Initialize the base agent with a name
         super().__init__(
-            name="Jessica - Easy Finance Specialist",
+            name="Tiffany - Easy Finance Specialist",
             route="/webhook",
             **kwargs
         )
-    
-    def _check_basic_auth(self, request) -> bool:
-        """
-        Override authentication check to allow SignalWire webhook requests.
-        SignalWire doesn't send Basic Auth credentials by default.
-        For production, consider implementing SignalWire signature verification instead.
-        """
-        # Always allow requests - SignalWire webhooks don't include Basic Auth
-        logger.info("✅ Allowing webhook request (auth bypassed for SignalWire)")
-        return True
-
-        # Configure voice - using ElevenLabs Turbo v2.5 for best quality + low latency
+        
+        # Configure voice - using ElevenLabs with best quality female voice
+        # Using eleven_turbo_v2_5 for optimal quality + low latency
         self.add_language(
             name="English (US)",
             code="en-US",
-            voice="elevenlabs.rachel:eleven_turbo_v2_5"  # Changed from eleven_flash_v2_5
+            voice="elevenlabs.rachel:eleven_turbo_v2_5"
         )
 
         self.prompt_add_section(
             'personality',
-            """You are Jessica, a professional specialist for Easy Finance on a recorded line. You handle inbound calls from leads who received SMS loan offers.
+            """You are Tiffany, a friendly and professional specialist for Easy Finance on a recorded line. You handle inbound calls from leads who received loan offers.
 
             CRITICAL RULES:
             - Follow the intake script EXACTLY as written - do not add extra words or improvise
             - Ask ONE question at a time and WAIT for the caller's full response
             - MANDATORY: You MUST call the collection function IMMEDIATELY after receiving each answer - never skip this step
             - The conversation CANNOT proceed until you call the required collection function for each step
-            - Be professional, warm, and efficient
-            - Keep your responses brief and natural
+            - Be professional, warm, friendly, and efficient
+            - Keep your responses brief and natural - sound like a real human, not robotic
             - If the caller says anything like "remove me from the list", "stop calling", "do not call", etc., 
               IMMEDIATELY call the handle_dnc_request function
+            - NEVER ask for SSN or social security number
             """
         )
 
@@ -88,6 +80,14 @@ class LoanIntakeAgent(AgentBase):
 
         # Enable debug routes for testing
         self.enable_debug_routes()
+    
+    def _check_basic_auth(self, request) -> bool:
+        """
+        Override authentication check to allow SignalWire webhook requests.
+        SignalWire doesn't send Basic Auth credentials by default.
+        """
+        # Always allow requests - SignalWire webhooks don't include Basic Auth
+        return True
 
     def _get_intake_state(self, raw_data):
         """Get current intake progress from global_data"""
@@ -111,7 +111,6 @@ class LoanIntakeAgent(AgentBase):
             "personal_loan_debt": None,
             "other_debt": None,
             "monthly_income": None,
-            "ssn_last_four": None,
 
             # Calculated values
             "total_debt": 0.0,
@@ -188,36 +187,52 @@ class LoanIntakeAgent(AgentBase):
                 - Do NOT add extra commentary, explanations, or questions
                 - Do not repeat questions if you get their answer
                 - If caller requests to be removed from calling list, call handle_dnc_request immediately
-                - Sequence: greeting → introduction → loan_amount → funds_purpose → employment → credit_card_debt → personal_loan_debt → other_debt → debt_summary → monthly_income → income_confirmation → transfer
+                - NEVER ask for SSN or social security number - this is strictly forbidden
+                - Sequence: greeting → disclaimer → introduction → loan_amount → funds_purpose → employment → credit_card_debt → personal_loan_debt → other_debt → debt_summary → monthly_income → income_confirmation → transfer
             """)
         )
 
         # ============================================
-        # STEP 1: GREETING
+        # STEP 1: GREETING - Initial greeting and confirm they're calling about loan offer
         # ============================================
         intake_context.add_step("greeting") \
-            .add_section("Current Task", "Greet the caller and collect their name") \
+            .add_section("Current Task", "Greet the caller warmly and confirm why they're calling") \
             .add_bullets("Process", [
-                "Say: 'Hi, this is Jessica with Easy Finance on a recorded line. May I have your name please?'",
+                "Say: 'Hi! This is Tiffany with Easy Finance on a recorded line. Are you calling regarding the loan offer you received?'",
+                "WAIT for their response - they should confirm yes",
+                "If they say yes or confirm, proceed to the next step",
+                "If they ask to be removed from the list, call handle_dnc_request immediately"
+            ]) \
+            .set_step_criteria("Caller confirms they're calling about loan offer") \
+            .set_functions(["handle_dnc_request"]) \
+            .set_valid_steps(["disclaimer"])
+
+        # ============================================
+        # STEP 2: DISCLAIMER - Recorded line notice and get name
+        # ============================================
+        intake_context.add_step("disclaimer") \
+            .add_section("Current Task", "Inform about recording and get caller's name") \
+            .add_bullets("Process", [
+                "Say: 'Perfect! All calls are recorded for quality and compliance purposes. To whom do I have the pleasure of speaking with today?'",
                 "WAIT for their name response",
                 "NEVER use numbers or phone numbers as a name",
                 "REMEMBER to call collect_caller_name function after they tell their name",
-                "Do NOT move to next step until function is called",
-                "If they ask to be removed from the list, call handle_dnc_request immediately"
+                "Do NOT move to next step until function is called"
             ]) \
             .set_step_criteria("collect_caller_name function called successfully") \
             .set_functions(["collect_caller_name", "handle_dnc_request"]) \
             .set_valid_steps(["introduction"])
 
         # ============================================
-        # STEP 2: INTRODUCTION
+        # STEP 3: INTRODUCTION
         # ============================================
         intake_context.add_step("introduction") \
             .add_section("Current Task", "Explain the automated intake system") \
             .add_bullets("Process", [
-                "Say EXACTLY: 'This is our secured automated intake system. It's built to make our process quick, private, and fully personalized. I'll ask a few short questions to confirm eligibility and then connect you to a senior underwriting specialist to review your actual loan options.'",
+                "Use their name and say: 'Great to meet you, [NAME]! This is our secure automated intake system. I'll ask a few quick questions to confirm your eligibility, and then connect you with a senior specialist to discuss your options. Sound good?'",
+                "WAIT for confirmation, then proceed"
             ]) \
-            .set_step_criteria("Introduction script delivered") \
+            .set_step_criteria("Introduction delivered and caller agrees to proceed") \
             .set_functions(["handle_dnc_request"]) \
             .set_valid_steps(["loan_amount"])
 
@@ -752,41 +767,7 @@ class LoanIntakeAgent(AgentBase):
             logger.error(f"❌ Error in collect_monthly_income: {str(e)}")
             return SwaigFunctionResult(response="Error collecting income")
 
-    @AgentBase.tool(
-        name="collect_ssn_last_four",
-        description="Collect the social security number (SSN) last four digits of the caller in caller data.",
-        parameters={
-            "type": "object",
-            "properties": {
-                "digits": {
-                    "type": "string",
-                    "description": "Last 4 digits of SSN as a string (e.g., '1234'). Must be exactly 4 digits."
-                }
-            },
-            "required": ["digits"]
-        }
-    )
-    def collect_ssn_last_four(self, args, raw_data):
-        """Collect SSN last 4 digits"""
-        try:
-            digits = str(args.get("digits"))
-
-            intake_state, global_data = self._get_intake_state(raw_data)
-
-            intake_state["ssn_last_four"] = digits
-            intake_state["answered"].append("ssn_last_four")
-
-            logger.info(f"🔒 Collected SSN last 4: ***{digits}")
-            self._print_collected_data(intake_state)
-
-            result = SwaigFunctionResult(
-                response="Collected social security number."
-            )
-            return self._save_intake_state(result, intake_state, global_data)
-
-        except Exception as e:
-            logger.error(f"❌ Error in collect_ssn_last_four: {str(e)}")
-            return SwaigFunctionResult(response="Error collecting SSN")
+    # NOTE: SSN collection removed - we do not collect SSN
 
     @AgentBase.tool(
         name='transfer_call',
@@ -899,12 +880,6 @@ class LoanIntakeAgent(AgentBase):
             logger.info(f"  Monthly Income: ${intake_state.get('monthly_income'):,.2f}")
         else:
             logger.info("  Monthly Income: Not collected")
-
-        logger.info("\nVERIFICATION:")
-        if intake_state.get('ssn_last_four'):
-            logger.info(f"  SSN Last 4: ***{intake_state.get('ssn_last_four')}")
-        else:
-            logger.info("  SSN Last 4: Not collected")
 
         logger.info("\nDNC STATUS:")
         logger.info(f"  Is DNC: {intake_state.get('is_dnc', False)}")
