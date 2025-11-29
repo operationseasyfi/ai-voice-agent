@@ -179,16 +179,14 @@ class LoanIntakeAgent(AgentBase):
             contexts.add_context("default")
             .add_section("Goal", "Complete the loan intake process by following the EXACT script in sequence")
             .add_section("Critical Rules", """
-                - Ask ONLY ONE question per step - never combine questions
-                - WAIT for the caller's complete response before proceeding
-                - IMMEDIATELY call the collection function after receiving each answer - this is MANDATORY
-                - Do NOT proceed to the next step until the collection function has been called
-                - Do NOT skip any steps or questions
-                - Do NOT add extra commentary, explanations, or questions
-                - Do not repeat questions if you get their answer
-                - If caller requests to be removed from calling list, call handle_dnc_request immediately
-                - NEVER ask for SSN or social security number - this is strictly forbidden
-                - Sequence: greeting → disclaimer → introduction → loan_amount → funds_purpose → employment → credit_card_debt → personal_loan_debt → other_debt → debt_summary → monthly_income → income_confirmation → transfer
+                - Ask ONE question at a time and WAIT for the response
+                - IMMEDIATELY call the collection function after receiving each answer
+                - Do NOT ask follow-up questions - each question should get amount in one response
+                - If they say no/none/zero for debt questions, use 0 as the amount
+                - Keep responses SHORT and natural - minimize TTS usage
+                - If caller requests DNC, call handle_dnc_request immediately
+                - NEVER ask for SSN or social security number
+                - Sequence: greeting → disclaimer → introduction → loan_amount → funds_purpose → employment → credit_card_debt → personal_loan_debt → other_debt → monthly_income → transfer
             """)
         )
 
@@ -288,13 +286,14 @@ class LoanIntakeAgent(AgentBase):
         # STEP 6: CREDIT CARD DEBT (Question 4)
         # ============================================
         intake_context.add_step("credit_card_debt") \
-            .add_section("Current Task", "Ask Question 4 from the script") \
+            .add_section("Current Task", "Ask about credit card debt with amount") \
             .add_bullets("Process", [
-                "Ask EXACTLY: 'About how much total unsecured credit card debt are you carrying right now?'",
-                "WAIT for the amount (use 0 if they say none)",
-                "Do NOT add extra commentary",
-                "IMMEDIATELY call collect_credit_card_debt function after they provide the amount",
-                "Do NOT move to next step until function is called"
+                "Ask EXACTLY: 'Do you have any credit card debt? If so, approximately how much?'",
+                "WAIT for their answer",
+                "If they say no/none/zero, use 0",
+                "If they give an amount, use that amount",
+                "IMMEDIATELY call collect_credit_card_debt function with the amount",
+                "Do NOT ask follow-up questions about the amount"
             ]) \
             .set_step_criteria("collect_credit_card_debt function called successfully") \
             .set_functions(["collect_credit_card_debt", "handle_dnc_request"]) \
@@ -304,13 +303,14 @@ class LoanIntakeAgent(AgentBase):
         # STEP 7: PERSONAL LOAN DEBT (Question 5)
         # ============================================
         intake_context.add_step("personal_loan_debt") \
-            .add_section("Current Task", "Ask Question 5 from the script") \
+            .add_section("Current Task", "Ask about personal loan debt with amount") \
             .add_bullets("Process", [
-                "Ask EXACTLY: 'And do you have any balances on unsecured personal loans?'",
-                "WAIT for the amount (use 0 if they say no)",
-                "Do NOT add extra commentary",
-                "IMMEDIATELY call collect_personal_loan_debt function after they provide the amount",
-                "Do NOT move to next step until function is called"
+                "Ask EXACTLY: 'Any personal loans? If so, how much?'",
+                "WAIT for their answer",
+                "If they say no/none/zero, use 0",
+                "If they give an amount, use that amount",
+                "IMMEDIATELY call collect_personal_loan_debt function with the amount",
+                "Do NOT ask follow-up questions"
             ]) \
             .set_step_criteria("collect_personal_loan_debt function called successfully") \
             .set_functions(["collect_personal_loan_debt", "handle_dnc_request"]) \
@@ -320,74 +320,45 @@ class LoanIntakeAgent(AgentBase):
         # STEP 8: OTHER DEBT (Question 6)
         # ============================================
         intake_context.add_step("other_debt") \
-            .add_section("Current Task", "Ask Question 6 from the script") \
+            .add_section("Current Task", "Ask about other debt with amount") \
             .add_bullets("Process", [
-                "Ask EXACTLY: 'How about medical bills or any other balances you're aware of?'",
-                "WAIT for the amount (use 0 if they say none)",
-                "Do NOT add extra commentary",
-                "IMMEDIATELY call collect_other_debt function after they provide the amount",
-                "Do NOT move to next step until function is called"
+                "Ask EXACTLY: 'Any medical bills or other debt? If so, approximately how much?'",
+                "WAIT for their answer",
+                "If they say no/none/zero, use 0",
+                "If they give an amount, use that amount",
+                "IMMEDIATELY call collect_other_debt function with the amount",
+                "Do NOT ask follow-up questions"
             ]) \
             .set_step_criteria("collect_other_debt function called successfully") \
             .set_functions(["collect_other_debt", "handle_dnc_request"]) \
-            .set_valid_steps(["debt_summary"])
-
-        # ============================================
-        # STEP 9: DEBT SUMMARY
-        # ============================================
-        intake_context.add_step("debt_summary") \
-            .add_section("Current Task", "Summarize all debt collected") \
-            .add_bullets("Process", [
-                "Say EXACTLY: 'So just to summarize, you have $[X] in credit card debt, $[Y] in personal loans, and $[Z] in other debt.'",
-                "Use the ACTUAL amounts collected from previous steps",
-                "Do NOT wait for response - move immediately to monthly_income"
-            ]) \
-            .set_step_criteria("Debt summary delivered") \
-            .set_functions(["handle_dnc_request"]) \
             .set_valid_steps(["monthly_income"])
 
         # ============================================
-        # STEP 10: MONTHLY INCOME (Question 7)
+        # STEP 9: MONTHLY INCOME (Question 7)
         # ============================================
         intake_context.add_step("monthly_income") \
-            .add_section("Current Task", "Ask Question 7 from the script") \
+            .add_section("Current Task", "Ask about monthly take-home income") \
             .add_bullets("Process", [
-                "Ask EXACTLY: 'Now, can you please provide your monthly income amount?'",
+                "Ask EXACTLY: 'What's your monthly take-home pay after taxes?'",
                 "WAIT for the dollar amount",
-                "Do NOT add extra commentary",
-                "IMMEDIATELY call collect_monthly_income function after they tell their monthly income",
-                "Do NOT move to next step until function is called"
+                "IMMEDIATELY call collect_monthly_income function with the amount",
+                "Do NOT ask follow-up questions about pre/post tax"
             ]) \
             .set_step_criteria("collect_monthly_income function called successfully") \
             .set_functions(["collect_monthly_income", "handle_dnc_request"]) \
-            .set_valid_steps(["income_confirmation"])
+            .set_valid_steps(["transfer"])
 
         # ============================================
-        # STEP 10: INCOME CONFIRMATION
-        # ============================================
-        intake_context.add_step("income_confirmation") \
-            .add_section("Current Task", "Confirm the income amount is monthly") \
-            .add_bullets("Process", [
-                "Confirm EXACTLY: 'And that's your monthly take-home after taxes, correct?'",
-                "WAIT for their confirmation",
-                "If they confirm, proceed to transfer",
-                "If they clarify (e.g., 'No, that's before taxes'), ask for the after-tax amount"
-            ]) \
-            .set_step_criteria("Income confirmed as monthly take-home") \
-            .set_functions(["handle_dnc_request"]) \
-            .set_valid_steps(["transfer"])  # Changed from ["ssn_last_four"]
-
-        # ============================================
-        # STEP 11: TRANSFER
+        # STEP 10: TRANSFER - End call and save data
         # ============================================
         intake_context.add_step("transfer") \
-            .add_section("Current Task", "Deliver transfer message from script") \
+            .add_section("Current Task", "Thank caller and end the call") \
             .add_bullets("Process", [
-                "Say EXACTLY: 'Thank you, I appreciate your patience. Now that I have all the necessary information, I will connect you with a senior underwriter who will go over your loan options in detail. Please hold for a moment while I transfer you.'",
-                "Call transfer_call function to initiate the transfer",
-                "Do NOT wait for response - call will be transferred automatically"
+                "Say EXACTLY: 'Perfect! Thank you for that information. A senior specialist will review your application and reach out shortly. Have a great day!'",
+                "Call transfer_call function to save the data and end the call",
+                "This will save all collected information to the database"
             ]) \
-            .set_step_criteria("Transfer message delivered") \
+            .set_step_criteria("Call completed and data saved") \
             .set_functions(['transfer_call']) \
             .set_valid_steps([])  # End of flow
 
@@ -446,17 +417,20 @@ class LoanIntakeAgent(AgentBase):
             
             logger.warning(f"🚫 DNC Request detected: '{phrase}' from {intake_state.get('caller_number')}")
             
-            # Save call record to database with DNC flag (async in background)
+            # Save call record to database with DNC flag (synchronous to ensure it completes)
             call_id = intake_state.get("call_id")
             if call_id:
-                asyncio.create_task(
-                    call_record_service.save_call_record(
-                        call_sid=call_id,
-                        intake_state=intake_state,
-                        client_id=intake_state.get("client_id"),
-                        agent_id=intake_state.get("agent_id")
-                    )
+                logger.info(f"💾 Saving DNC call record for call {call_id}...")
+                saved_record = call_record_service.save_call_record_sync(
+                    call_sid=call_id,
+                    intake_state=intake_state,
+                    client_id=intake_state.get("client_id"),
+                    agent_id=intake_state.get("agent_id")
                 )
+                if saved_record:
+                    logger.info(f"✅ DNC call record saved: {saved_record.id}")
+                else:
+                    logger.error(f"❌ Failed to save DNC call record")
             
             result = SwaigFunctionResult(
                 response="I understand. I've noted your request and you've been added to our do not call list. "
@@ -808,17 +782,20 @@ class LoanIntakeAgent(AgentBase):
             # Print final summary
             self._print_collected_data(intake_state)
             
-            # Save call record to database (async in background)
+            # Save call record to database (synchronous to ensure it completes)
             call_id = intake_state.get("call_id")
             if call_id:
-                asyncio.create_task(
-                    call_record_service.save_call_record(
-                        call_sid=call_id,
-                        intake_state=intake_state,
-                        client_id=intake_state.get("client_id"),
-                        agent_id=intake_state.get("agent_id")
-                    )
+                logger.info(f"💾 Saving call record for call {call_id}...")
+                saved_record = call_record_service.save_call_record_sync(
+                    call_sid=call_id,
+                    intake_state=intake_state,
+                    client_id=intake_state.get("client_id"),
+                    agent_id=intake_state.get("agent_id")
                 )
+                if saved_record:
+                    logger.info(f"✅ Call record saved successfully: {saved_record.id}")
+                else:
+                    logger.error(f"❌ Failed to save call record for {call_id}")
             
             # Save final state
             result = SwaigFunctionResult(

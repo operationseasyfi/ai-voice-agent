@@ -200,6 +200,63 @@ class CallRecordService:
                 logger.error(f"Failed to update call duration: {str(e)}")
 
 
+    def save_call_record_sync(
+        self,
+        call_sid: str,
+        intake_state: Dict[str, Any],
+        client_id: Optional[UUID] = None,
+        agent_id: Optional[UUID] = None
+    ) -> Optional[CallRecord]:
+        """
+        Synchronous wrapper to save call record.
+        Use this from synchronous SWAIG functions.
+        """
+        import asyncio
+        
+        try:
+            # Try to get the running event loop
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                # If loop is running, create a new task and let it run
+                # This is a workaround for running async in sync context
+                import concurrent.futures
+                import threading
+                
+                result = [None]
+                exception = [None]
+                
+                def run_async():
+                    try:
+                        new_loop = asyncio.new_event_loop()
+                        asyncio.set_event_loop(new_loop)
+                        try:
+                            result[0] = new_loop.run_until_complete(
+                                self.save_call_record(call_sid, intake_state, client_id, agent_id)
+                            )
+                        finally:
+                            new_loop.close()
+                    except Exception as e:
+                        exception[0] = e
+                
+                thread = threading.Thread(target=run_async)
+                thread.start()
+                thread.join(timeout=10)  # 10 second timeout
+                
+                if exception[0]:
+                    logger.error(f"Error saving call record in thread: {exception[0]}")
+                    return None
+                    
+                return result[0]
+            else:
+                # No running loop, just run directly
+                return loop.run_until_complete(
+                    self.save_call_record(call_sid, intake_state, client_id, agent_id)
+                )
+        except Exception as e:
+            logger.error(f"❌ Failed to save call record synchronously: {str(e)}")
+            return None
+
+
 # Singleton instance
 call_record_service = CallRecordService()
 
