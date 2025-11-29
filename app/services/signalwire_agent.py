@@ -50,11 +50,11 @@ class LoanIntakeAgent(AgentBase):
             **kwargs
         )
 
-        # Configure voice and language (required for voice agents)
+        # Configure voice - using ElevenLabs Turbo v2.5 for best quality + low latency
         self.add_language(
             name="English (US)",
             code="en-US",
-            voice="elevenlabs.rachel:eleven_flash_v2_5"
+            voice="elevenlabs.rachel:eleven_turbo_v2_5"  # Changed from eleven_flash_v2_5
         )
 
         self.prompt_add_section(
@@ -178,7 +178,7 @@ class LoanIntakeAgent(AgentBase):
                 - Do NOT add extra commentary, explanations, or questions
                 - Do not repeat questions if you get their answer
                 - If caller requests to be removed from calling list, call handle_dnc_request immediately
-                - Sequence: greeting → introduction → loan_amount → funds_purpose → employment → credit_card_debt → personal_loan_debt → other_debt → debt_summary → monthly_income → income_confirmation → ssn_last_four
+                - Sequence: greeting → introduction → loan_amount → funds_purpose → employment → credit_card_debt → personal_loan_debt → other_debt → debt_summary → monthly_income → income_confirmation → transfer
             """)
         )
 
@@ -338,37 +338,22 @@ class LoanIntakeAgent(AgentBase):
             .set_valid_steps(["income_confirmation"])
 
         # ============================================
-        # STEP 11: INCOME CONFIRMATION (Question 8)
+        # STEP 10: INCOME CONFIRMATION
         # ============================================
         intake_context.add_step("income_confirmation") \
-            .add_section("Current Task", "Confirm monthly income") \
+            .add_section("Current Task", "Confirm the income amount is monthly") \
             .add_bullets("Process", [
-                "Say EXACTLY: 'Thank you for that information. Just to confirm, your total monthly income is $[amount].'",
-                "Use the ACTUAL income amount collected",
-                "WAIT for their confirmation (yes/okay/correct)",
+                "Confirm EXACTLY: 'And that's your monthly take-home after taxes, correct?'",
+                "WAIT for their confirmation",
+                "If they confirm, proceed to transfer",
+                "If they clarify (e.g., 'No, that's before taxes'), ask for the after-tax amount"
             ]) \
-            .set_step_criteria("Income confirmed by caller") \
+            .set_step_criteria("Income confirmed as monthly take-home") \
             .set_functions(["handle_dnc_request"]) \
-            .set_valid_steps(["ssn_last_four"])
+            .set_valid_steps(["transfer"])  # Changed from ["ssn_last_four"]
 
         # ============================================
-        # STEP 12: SSN LAST 4 (Question 9)
-        # ============================================
-        intake_context.add_step("ssn_last_four") \
-            .add_section("Current Task", "Ask Question 9 from the script") \
-            .add_bullets("Process", [
-                "Say EXACTLY: 'Now I will need your last 4 digits of your Social Security number to securely match your file and verify your identity. This will not impact your credit and does not count as an inquiry because it's a soft credit pull. Can you provide those last 4 digits?'",
-                "WAIT for exactly 4 digits",
-                "Do NOT add extra commentary",
-                "IMMEDIATELY call collect_ssn_last_four function with the 4 digits they provided",
-                "CRITICAL: Do NOT move to next step until function is called"
-            ]) \
-            .set_step_criteria("collect_ssn_last_four function called successfully") \
-            .set_functions(["collect_ssn_last_four", "handle_dnc_request"]) \
-            .set_valid_steps(["transfer"])
-
-        # ============================================
-        # STEP 13: TRANSFER
+        # STEP 11: TRANSFER
         # ============================================
         intake_context.add_step("transfer") \
             .add_section("Current Task", "Deliver transfer message from script") \
